@@ -9,6 +9,15 @@
 
 set -e
 
+# macOS sed requires backup extension, GNU sed doesn't
+_sed_i() {
+    if sed --version 2>/dev/null | grep -q GNU; then
+        sed -i'' "$@"     # GNU
+    else
+        sed -i '.k230bak' "$@"  # macOS (BSD)
+    fi
+}
+
 BIN_DIR="$HOME/.local/bin"
 TARGET_FILE="$BIN_DIR/k230"
 KENDRYTE_BASE="${KENDRYTE_INSTALL_URL:-https://www.kendryte.com/misc}"
@@ -31,8 +40,9 @@ uninstall() {
     info "Removing $TARGET_FILE..."
     rm -f "$TARGET_FILE"
     for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
-        [ -f "$rc" ] && sed -i '/# K230 SDK Builder Path/d;/^export PATH="\$HOME\/.local\/bin:\$PATH"$/d' "$rc"
+        [ -f "$rc" ] && _sed_i '/# K230 SDK Builder Path/d;/^export PATH="\$HOME\/.local\/bin:\$PATH"$/d' "$rc"
     done
+    rm -f "$HOME/.zshrc.k230bak" "$HOME/.bashrc.k230bak" "$HOME/.profile.k230bak" 2>/dev/null || true
     info "Uninstall complete."
     exit 0
 }

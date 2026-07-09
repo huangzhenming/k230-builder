@@ -10,6 +10,18 @@
 
 set -e
 
+# ---- Portable timeout (macOS lacks GNU timeout) ----
+_timeout() {
+    local t=$1; shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$t" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$t" "$@"
+    else
+        perl -e 'alarm shift; exec @ARGV || die "exec: $!"' "$t" "$@"
+    fi
+}
+
 # ---- Check Docker ----
 if ! command -v docker > /dev/null 2>&1; then
     echo "[k230] Docker is not installed. Please install Docker first:"
@@ -33,6 +45,22 @@ MIRROR="registry.kendryte.com/k230-builder:${TAG}"
 
 VOLUME="${K230_BUILDER_VOLUME:-k230_toolchains}"
 
+# ---- Platform detection (image is x86_64 only) ----
+DOCKER_PLATFORM=""
+if [ "$(uname -m)" = "arm64" ] || [ "$(uname -m)" = "aarch64" ]; then
+    DOCKER_PLATFORM="--platform linux/amd64"
+    echo "[k230] ARM64 host detected, forcing linux/amd64 (Rosetta emulation)"
+fi
+
+# ---- Portable CPU count (macOS lacks nproc) ----
+_nproc() {
+    if command -v nproc >/dev/null 2>&1; then
+        nproc
+    else
+        sysctl -n hw.ncpu 2>/dev/null || echo 4
+    fi
+}
+
 # ---- Ensure image is available (local-first, ghcr-first) ----
 ensure_image() {
     local target="${1:-$IMAGE}"
@@ -47,22 +75,22 @@ ensure_image() {
     # Quick pre-check: can we even reach ghcr?
     local ghcr_ok=0
     if [ "$target" != "$MIRROR" ]; then
-        if timeout 5 curl -sfI --connect-timeout 3 "https://ghcr.io/v2/" > /dev/null 2>&1; then
+        if _timeout 5 curl -sfI --connect-timeout 3 "https://ghcr.io/v2/" > /dev/null 2>&1; then
             ghcr_ok=1
         else
             echo "[k230] ghcr.io unreachable, switching to mirror"
         fi
     fi
 
-    # Try ghcr (300s = ~3MB/s floor for 1GB image)
-    if [ "$ghcr_ok" = "1" ] && timeout 300 docker pull "$target"; then
+    # Try ghcr
+    if [ "$ghcr_ok" = "1" ] && _timeout 300 docker pull $DOCKER_PLATFORM "$target"; then
         echo "[k230] pulled from ghcr.io"
         return 0
     fi
 
     # Fallback: pull from mirror, then tag to canonical name
     echo "[k230] pulling from mirror..."
-    if timeout 600 docker pull "$MIRROR"; then
+    if _timeout 600 docker pull $DOCKER_PLATFORM "$MIRROR"; then
         if [ "$target" != "$MIRROR" ]; then
             docker tag "$MIRROR" "$target"
             echo "[k230] tagged $MIRROR -> $target"
@@ -82,9 +110,9 @@ case "${1:-}" in
             PULL_IMAGE="${IMAGE%:*}:${2}"
         fi
         echo "[k230] pulling $PULL_IMAGE ..."
-        docker pull "$PULL_IMAGE" || {
+        docker pull $DOCKER_PLATFORM "$PULL_IMAGE" || {
             echo "[k230] ghcr pull failed, trying mirror..."
-            docker pull "$MIRROR" || {
+            docker pull $DOCKER_PLATFORM "$MIRROR" || {
                 echo "[k230] pull failed"
                 exit 1
             }
@@ -96,7 +124,8 @@ case "${1:-}" in
         exit 0
         ;;
     download-toolchains)
-        ;;&
+        echo "[k230] download-toolchains not yet implemented"
+        ;;
     help|--help|-h)
         echo "k230 — K230 SDK build wrapper"
         echo ""
@@ -130,11 +159,12 @@ if [ -S /var/run/docker.sock ]; then
     fi
 fi
 
-# 限制并发数，防止因并发过高触发 host-dbus-glib 等包的编译 Bug
-# 建议用户手动传入 -j 参数，否则默认使用 nproc
-MAKE_J_LEVEL="-j$(nproc)"
+# Limit parallelism to avoid build bugs in packages like host-dbus-glib
+# Users can override with -j flag; defaults to CPU core count
+MAKE_J_LEVEL="-j$(_nproc)"
 
 exec docker run -it --rm \
+    $DOCKER_PLATFORM \
     --security-opt seccomp=unconfined \
     --ulimit nofile=1024:2048 \
     -e HOST_UID="$(id -u)" \
