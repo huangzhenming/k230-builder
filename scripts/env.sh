@@ -23,9 +23,16 @@ export K230_TC3_DIR="${K230_TC3_DIR:-$K230_TOOLCHAIN_ROOT/riscv64-linux-musleabi
 # ---- TC4: ilp32 (bin lives under riscv/ subdirectory) ----
 export K230_TC4_DIR="${K230_TC4_DIR:-$K230_TOOLCHAIN_ROOT/riscv64ilp32-elf-ubuntu-22.04-gcc-nightly-2024.06.25}"
 
+# ---- TC5: NuttX bare-metal GCC (xPack riscv-none-elf) ----
+export K230_TC5_DIR="${K230_TC5_DIR:-$K230_TOOLCHAIN_ROOT/xpack-riscv-none-elf-gcc-13.2.0-2}"
+
+# ---- TC6: LLVM / clang (NuttX SDK, structure only) ----
+export K230_TC6_DIR="${K230_TC6_DIR:-$K230_TOOLCHAIN_ROOT/llvm-riscv-none-elf}"
+
 # ---- Legacy aliases for backward compatibility ----
 export K230_LINUX_TOOLCHAIN="$K230_TC2_DIR"
 export K230_RTOS_TOOLCHAIN="$K230_TC3_DIR"
+export K230_NUTTX_TOOLCHAIN_DIR="$K230_TC5_DIR"
 
 # ---- Build PATH (only add if directory exists) ----
 _add_path() {
@@ -38,6 +45,8 @@ _add_path "$K230_TC1_DIR/bin"
 _add_path "$K230_TC2_DIR/bin"
 _add_path "$K230_TC3_DIR/bin"
 _add_path "$K230_TC4_DIR/riscv/bin"
+_add_path "$K230_TC5_DIR/bin"
+_add_path "$K230_TC6_DIR/bin"
 
 # =========================
 # example docker run

@@ -35,6 +35,23 @@ k230 make CONF=k230_canmv_defconfig
 ENABLE_TC4=1 k230 make CONF=k230_evb_defconfig
 ```
 
+### 编译 NuttX SDK
+
+NuttX SDK 用 `west`（已内置）+ 裸机工具链（TC5）。设 `K230_PROFILE=nuttx` 即只拉这一套：
+```bash
+cd your-k230-nuttx-sdk/          # west 工作区
+export K230_PROFILE=nuttx
+k230 west update                 # 同步组件仓
+k230 west build                  # opensbi → nuttx → image，产出 k230-nuttx-sdcard.img
+k230 west build --list-def       # 查看可选 board/config
+```
+容器内 `riscv-none-elf-gcc`（NuttX cmake 自动识别）与 `riscv64-unknown-elf-gcc`（OpenSBI 用，
+指向前者的符号链接）都在 PATH。
+
+**将来切 LLVM**：设 `TC6_URLS` 指向 clang 工具链（提供 `riscv64-unknown-elf-clang` /
+`-llvm-*`）+ 目标 defconfig 打开 `CONFIG_ARCH_TOOLCHAIN_CLANG=y` 即可；OpenSBI 侧可用
+`K230_CROSS_COMPILE` 覆盖前缀。
+
 ### 镜像选择
 
 | 网络环境 | 行为 |
@@ -83,8 +100,25 @@ repo sync --reference=/data/git-mirror/repos
 | TC2 | Xuantie-900 6.6.0 (glibc) | Linux SDK 全组件 |
 | TC3 | Musl RT-Smart | RTOS RT-Smart, MPP, CanMV |
 | TC4 | RuyiSDK ILP32 (elf) | Linux ILP32 内核 |
+| TC5 | xPack riscv-none-elf GCC 13.2.0 | **NuttX SDK**（裸机；含 `riscv64-unknown-elf-*` 符号链接）|
+| TC6 | LLVM / clang（预留）| NuttX SDK 将来切 LLVM（默认关，设 `TC6_URLS` 启用）|
 
 工具链存放在 Docker Volume `k230_toolchains` 中，只下载一次。首次启动 ~10GB 磁盘，下载耗时取决于网络。
+
+### PROFILE：按需下载工具链
+
+`K230_PROFILE` 决定下载哪几套工具链（**显式 `ENABLE_TCx` 覆盖 profile**）：
+
+| PROFILE | 工具链 |
+|---|---|
+| `nuttx` | TC5（只拉一套裸机 GCC，不下 10GB Linux 工具链）|
+| `linux` | TC1 + TC2 |
+| `rtos`  | TC1 + TC3 |
+| `all`   | TC1 + TC2 + TC3 + TC5 |
+| *未设置* | legacy：按 `ENABLE_TC*` 现状（不破坏现有 RTOS/Linux 用法）|
+
+显式设置 profile 时，容器启动会**自动下载**对应工具链，故 `K230_PROFILE=nuttx k230 west build`
+一条命令即可。未设 profile 时仍按需（`k230 download-toolchains`）。
 
 ---
 

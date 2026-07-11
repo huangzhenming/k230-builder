@@ -60,29 +60,46 @@ setup_host_config() {
 }
 
 # ============================================
+# Resolve K230_PROFILE -> ENABLE_TC* defaults
+# (explicitly-set ENABLE_TCx always wins over the profile)
+# ============================================
+resolve_profile() {
+    local p="${K230_PROFILE:-}"
+    local d1 d2 d3 d4 d5 d6
+    case "$p" in
+        nuttx)  d1=0 d2=0 d3=0 d4=0 d5=1 d6=0 ;;
+        linux)  d1=1 d2=1 d3=0 d4=0 d5=0 d6=0 ;;
+        rtos)   d1=1 d2=0 d3=1 d4=0 d5=0 d6=0 ;;
+        all)    d1=1 d2=1 d3=1 d4=0 d5=1 d6=0 ;;
+        "")     # legacy: preserve prior behavior (TC1-4 on, TC5/TC6 off)
+                d1=1 d2=1 d3=1 d4=1 d5=0 d6=0 ;;
+        *)
+            echo "[k230] warning: unknown K230_PROFILE='$p' (use nuttx|linux|rtos|all); treating as legacy"
+            d1=1 d2=1 d3=1 d4=1 d5=0 d6=0 ;;
+    esac
+    export ENABLE_TC1="${ENABLE_TC1:-$d1}"
+    export ENABLE_TC2="${ENABLE_TC2:-$d2}"
+    export ENABLE_TC3="${ENABLE_TC3:-$d3}"
+    export ENABLE_TC4="${ENABLE_TC4:-$d4}"
+    export ENABLE_TC5="${ENABLE_TC5:-$d5}"
+    export ENABLE_TC6="${ENABLE_TC6:-$d6}"
+    if [ -n "$p" ]; then
+        echo "[k230] profile '$p' -> TC1=$ENABLE_TC1 TC2=$ENABLE_TC2 TC3=$ENABLE_TC3 TC4=$ENABLE_TC4 TC5=$ENABLE_TC5 TC6=$ENABLE_TC6"
+    fi
+    return 0
+}
+
+# ============================================
 # Initialize toolchains
 # ============================================
 init_toolchains() {
-    ENABLE_TC1=${ENABLE_TC1:-1}
-    ENABLE_TC2=${ENABLE_TC2:-1}
-    ENABLE_TC3=${ENABLE_TC3:-1}
-    ENABLE_TC4=${ENABLE_TC4:-1}
-
-    if [ "$ENABLE_TC1" = "1" ]; then
-        download_tc1
-    fi
-
-    if [ "$ENABLE_TC2" = "1" ]; then
-        download_tc2
-    fi
-
-    if [ "$ENABLE_TC3" = "1" ]; then
-        download_tc3
-    fi
-
-    if [ "$ENABLE_TC4" = "1" ]; then
-        download_tc4
-    fi
+    [ "$ENABLE_TC1" = "1" ] && download_tc1
+    [ "$ENABLE_TC2" = "1" ] && download_tc2
+    [ "$ENABLE_TC3" = "1" ] && download_tc3
+    [ "$ENABLE_TC4" = "1" ] && download_tc4
+    [ "$ENABLE_TC5" = "1" ] && download_tc5
+    [ "$ENABLE_TC6" = "1" ] && download_tc6
+    return 0
 }
 
 # ============================================
@@ -110,6 +127,14 @@ k230_setup_env() {
     if [ -d "/opt/toolchains/riscv64ilp32-elf-ubuntu-22.04-gcc-nightly-2024.06.25/riscv/bin" ]; then
         export PATH="/opt/toolchains/riscv64ilp32-elf-ubuntu-22.04-gcc-nightly-2024.06.25/riscv/bin:$PATH"
     fi
+    # TC5: NuttX bare-metal GCC (riscv-none-elf- + riscv64-unknown-elf- symlinks)
+    if [ -d "/opt/toolchains/xpack-riscv-none-elf-gcc-13.2.0-2/bin" ]; then
+        export PATH="/opt/toolchains/xpack-riscv-none-elf-gcc-13.2.0-2/bin:$PATH"
+    fi
+    # TC6: LLVM / clang (structure only; present once TC6 is configured)
+    if [ -d "/opt/toolchains/llvm-riscv-none-elf/bin" ]; then
+        export PATH="/opt/toolchains/llvm-riscv-none-elf/bin:$PATH"
+    fi
 
     # Ensure workspace directory exists and has correct ownership
     mkdir -p /workspace
@@ -123,6 +148,20 @@ create_user
 
 setup_host_config
 
+# Resolve K230_PROFILE -> ENABLE_TC* (exported; inherited by the
+# download-toolchains exec below and by init_toolchains).
+resolve_profile
+
+# When a profile is explicitly requested, auto-provision its toolchains so
+# `K230_PROFILE=nuttx k230 west build` works in one shot.  With no profile
+# (legacy), provisioning stays on-demand via `k230 download-toolchains`.
+# Skip auto-provision for the toolchain management commands themselves.
+case "${1:-}" in
+    download-toolchains|list-toolchains) ;;
+    *) [ -n "${K230_PROFILE:-}" ] && init_toolchains ;;
+esac
+
+# (Re)build PATH now that any freshly-downloaded toolchains exist on disk.
 k230_setup_env
 
 case "${1:-}" in

@@ -17,17 +17,10 @@
 
 FROM ubuntu:22.04
 
-# Toolchain enable flags (default: all enabled)
-ARG ENABLE_TC1=1
-ARG ENABLE_TC2=1
-ARG ENABLE_TC3=1
-ARG ENABLE_TC4=1
-
-# Convert ARG to ENV for runtime use
-ENV ENABLE_TC1=${ENABLE_TC1}
-ENV ENABLE_TC2=${ENABLE_TC2}
-ENV ENABLE_TC3=${ENABLE_TC3}
-ENV ENABLE_TC4=${ENABLE_TC4}
+# NOTE: which toolchains get provisioned is decided at RUNTIME by
+# entrypoint.sh's resolve_profile() (K230_PROFILE + ENABLE_TC* env), NOT baked
+# in here.  Baking ENABLE_TC*=1 as image ENV would make it look "user-set" and
+# stop a profile (e.g. K230_PROFILE=nuttx) from disabling TC1-4.
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -83,10 +76,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     pkg-config \
     xz-utils \
+    # NuttX SDK build deps (Kconfig/ROMFS/device-tree/gperf/xxd)
+    genromfs \
+    device-tree-compiler \
+    gperf \
+    xxd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages for K230 SDK
+#  - west + kconfiglib: NuttX SDK entry point + Kconfig frontend (CMake build)
+#  - gmssl/pycryptodome: K230 image signing (west image)
 RUN pip3 install --no-cache-dir \
+    west \
+    kconfiglib \
     gmssl \
     pycryptodome \
     jsonschema \

@@ -27,6 +27,8 @@ download_single() {
         tc2) download_tc2 ;;
         tc3) download_tc3 ;;
         tc4) download_tc4 ;;
+        tc5|nuttx) download_tc5 ;;
+        tc6|llvm)  download_tc6 ;;
         *)   echo "[k230] error: unknown toolchain '$1'" >&2; return 1 ;;
     esac
 }
@@ -37,6 +39,8 @@ if [ ${#TC_ARGS[@]} -eq 0 ]; then
     [ "${ENABLE_TC2:-1}" = "1" ] && download_tc2
     [ "${ENABLE_TC3:-1}" = "1" ] && download_tc3
     [ "${ENABLE_TC4:-1}" = "1" ] && download_tc4
+    [ "${ENABLE_TC5:-0}" = "1" ] && download_tc5
+    [ "${ENABLE_TC6:-0}" = "1" ] && download_tc6
 else
     for tc in "${TC_ARGS[@]}"; do
         download_single "$tc"

@@ -4,11 +4,10 @@ set -u
 
 TOOLCHAIN_ROOT=${K230_TOOLCHAIN_ROOT:-/opt/toolchains}
 
-# ===== Default: all toolchains enabled =====
-ENABLE_TC1=${ENABLE_TC1:-1}
-ENABLE_TC2=${ENABLE_TC2:-1}
-ENABLE_TC3=${ENABLE_TC3:-1}
-ENABLE_TC4=${ENABLE_TC4:-1}
+# NOTE: do NOT default ENABLE_TC* here.  entrypoint.sh's resolve_profile()
+# (via K230_PROFILE) and download-toolchains own that defaulting; pre-setting
+# them to 1 here would make a profile like K230_PROFILE=nuttx unable to
+# disable TC1-4.
 
 # ===== TC1: Xuantie-900 gcc 5.10.4 (glibc, bz2) =====
 TC1_URLS=${TC1_URLS:-"https://kendryte-download.canaan-creative.com/k230/toolchain/Xuantie-900-gcc-linux-5.10.4-glibc-x86_64-V2.6.0.tar.bz2"}
@@ -41,6 +40,28 @@ TC4_DIR=${TC4_DIR:-"riscv64ilp32-elf-ubuntu-22.04-gcc-nightly-2024.06.25"}
 TC4_BIN=${TC4_BIN:-"riscv64-unknown-elf-gcc"}
 TC4_BIN_FULL="riscv/bin/${TC4_BIN}"
 TC4_SHA256=${TC4_SHA256:-"65cbdaa654890b02bf5d83c8f9a054bbf105126a08bb483d31620890851310bf"}
+
+# ===== TC5: xPack riscv-none-elf bare-metal GCC (NuttX SDK, gz) =====
+# NuttX's arch/risc-v cmake auto-detects `riscv-none-elf-gcc`.  We also symlink
+# `riscv64-unknown-elf-*` (see download_tc5) so the OpenSBI make
+# (CROSS_COMPILE=riscv64-unknown-elf-) and the host baseline both work.
+TC5_URLS=${TC5_URLS:-"https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v13.2.0-2/xpack-riscv-none-elf-gcc-13.2.0-2-linux-x64.tar.gz"}
+TC5_VERSION=${TC5_VERSION:-"13.2.0-2"}
+TC5_DIR=${TC5_DIR:-"xpack-riscv-none-elf-gcc-13.2.0-2"}
+TC5_BIN=${TC5_BIN:-"riscv-none-elf-gcc"}
+TC5_BIN_FULL="bin/${TC5_BIN}"
+TC5_SHA256=${TC5_SHA256:-""}   # optional; fill to enable integrity check
+
+# ===== TC6: LLVM / clang for riscv (NuttX SDK, structure only) =====
+# Placeholder slot for the future LLVM switch.  Leave TC6_URLS empty to keep it
+# a no-op; when set, NuttX's CLANG toolchain expects `riscv64-unknown-elf-clang`
+# / `riscv64-unknown-elf-llvm-*` on PATH (see Toolchain.cmake CLANG branch).
+TC6_URLS=${TC6_URLS:-""}
+TC6_VERSION=${TC6_VERSION:-"unset"}
+TC6_DIR=${TC6_DIR:-"llvm-riscv-none-elf"}
+TC6_BIN=${TC6_BIN:-"clang"}
+TC6_BIN_FULL="bin/${TC6_BIN}"
+TC6_SHA256=${TC6_SHA256:-""}
 
 # ===== Check if toolchain is already installed and valid =====
 # Args: DIR, VERSION, BIN (filename only), BIN_FULL (relative path from DIR)
@@ -268,6 +289,48 @@ download_tc4() {
         "gz"
 }
 
+download_tc5() {
+    install_toolchain \
+        "tc5-nuttx-gcc" \
+        "$TC5_VERSION" \
+        "$TC5_BIN" \
+        "$TC5_BIN_FULL" \
+        "$TC5_URLS" \
+        "$TC5_SHA256" \
+        "$TC5_DIR" \
+        "gz"
+
+    # Symlink riscv64-unknown-elf-* -> riscv-none-elf-* so the OpenSBI make
+    # (CROSS_COMPILE=riscv64-unknown-elf-) and the host baseline both resolve.
+    local bindir="$TOOLCHAIN_ROOT/$TC5_DIR/bin"
+    if [ -d "$bindir" ]; then
+        local f base alias
+        for f in "$bindir"/riscv-none-elf-*; do
+            [ -e "$f" ] || continue
+            base=$(basename "$f")
+            alias="riscv64-unknown-elf-${base#riscv-none-elf-}"
+            [ -e "$bindir/$alias" ] || ln -sf "$base" "$bindir/$alias"
+        done
+        echo "[k230] tc5: riscv64-unknown-elf-* symlinks ready"
+    fi
+}
+
+download_tc6() {
+    if [ -z "$TC6_URLS" ]; then
+        echo "[k230] tc6 (LLVM) URL not configured — set TC6_URLS to enable; skipping"
+        return 0
+    fi
+    install_toolchain \
+        "tc6-llvm" \
+        "$TC6_VERSION" \
+        "$TC6_BIN" \
+        "$TC6_BIN_FULL" \
+        "$TC6_URLS" \
+        "$TC6_SHA256" \
+        "$TC6_DIR" \
+        "${TC6_EXT:-xz}"
+}
+
 # ===== Legacy compatibility =====
 download_toolchain() {
     local NAME=${1:-}
@@ -277,17 +340,22 @@ download_toolchain() {
         tc2)  download_tc2 ;;
         tc3)  download_tc3 ;;
         tc4)  download_tc4 ;;
+        tc5)  download_tc5 ;;
+        tc6)  download_tc6 ;;
         linux)  download_tc2 ;;
         rtos)   download_tc3 ;;
+        nuttx)  download_tc5 ;;
+        llvm)   download_tc6 ;;
         all)
             download_tc1
             download_tc2
             download_tc3
             download_tc4
+            download_tc5
             ;;
         *)
             echo "[k230] error: unknown toolchain '$NAME'"
-            echo "[k230] usage: download_toolchain {tc1|tc2|tc3|tc4|linux|rtos|all}"
+            echo "[k230] usage: download_toolchain {tc1|tc2|tc3|tc4|tc5|tc6|linux|rtos|nuttx|llvm|all}"
             return 1
             ;;
     esac
@@ -315,6 +383,15 @@ setup_env() {
             export K230_ILP32_TOOLCHAIN=$TOOLCHAIN_ROOT/$TC4_DIR
             export PATH=$K230_ILP32_TOOLCHAIN/riscv/bin:$PATH
             ;;
+        tc5|nuttx)
+            # NuttX bare-metal GCC (riscv-none-elf-, plus riscv64-unknown-elf- symlinks)
+            export K230_NUTTX_TOOLCHAIN_DIR=$TOOLCHAIN_ROOT/$TC5_DIR
+            export PATH=$K230_NUTTX_TOOLCHAIN_DIR/bin:$PATH
+            ;;
+        tc6|llvm)
+            export K230_LLVM_TOOLCHAIN_DIR=$TOOLCHAIN_ROOT/$TC6_DIR
+            export PATH=$K230_LLVM_TOOLCHAIN_DIR/bin:$PATH
+            ;;
         linux)
             # linux SDK uses TC2 (6.6.0) as primary
             export K230_LINUX_TOOLCHAIN=$TOOLCHAIN_ROOT/$TC2_DIR
@@ -329,11 +406,12 @@ setup_env() {
             export K230_LINUX_TOOLCHAIN=$TOOLCHAIN_ROOT/$TC2_DIR
             export K230_RTOS_TOOLCHAIN=$TOOLCHAIN_ROOT/$TC3_DIR
             export K230_ILP32_TOOLCHAIN=$TOOLCHAIN_ROOT/$TC4_DIR
-            export PATH=$K230_LINUX_TOOLCHAIN/bin:$K230_RTOS_TOOLCHAIN/bin:$K230_ILP32_TOOLCHAIN/riscv/bin:$PATH
+            export K230_NUTTX_TOOLCHAIN_DIR=$TOOLCHAIN_ROOT/$TC5_DIR
+            export PATH=$K230_LINUX_TOOLCHAIN/bin:$K230_RTOS_TOOLCHAIN/bin:$K230_ILP32_TOOLCHAIN/riscv/bin:$K230_NUTTX_TOOLCHAIN_DIR/bin:$PATH
             ;;
         *)
             echo "[k230] error: unknown toolchain '$NAME'"
-            echo "[k230] usage: setup_env {tc1|tc2|tc3|tc4|linux|rtos|all}"
+            echo "[k230] usage: setup_env {tc1|tc2|tc3|tc4|tc5|tc6|linux|rtos|nuttx|llvm|all}"
             return 1
             ;;
     esac
