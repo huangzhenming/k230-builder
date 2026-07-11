@@ -121,11 +121,13 @@ VOLUME ["/opt/toolchains"]
 # Copy scripts
 COPY scripts/entrypoint.sh /entrypoint.sh
 COPY scripts/toolchain.sh /usr/local/bin/toolchain.sh
+COPY scripts/profile.sh /usr/local/bin/profile.sh
 COPY scripts/download-toolchains /usr/local/bin/download-toolchains
 COPY scripts/list-toolchains /usr/local/bin/list-toolchains
 COPY scripts/env.sh /usr/local/bin/env.sh
 RUN chmod +x /entrypoint.sh \
     /usr/local/bin/toolchain.sh \
+    /usr/local/bin/profile.sh \
     /usr/local/bin/download-toolchains \
     /usr/local/bin/list-toolchains \
     /usr/local/bin/env.sh

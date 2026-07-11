@@ -167,8 +167,9 @@ if [ -S /var/run/docker.sock ]; then
     fi
 fi
 
-# Limit parallelism to avoid build bugs in packages like host-dbus-glib
-# Users can override with -j flag; defaults to CPU core count
+# Parallelism hint (reserved: computed for future use, not yet forwarded to the
+# container command; kept so callers/SDKs can rely on a consistent default).
+# shellcheck disable=SC2034
 MAKE_J_LEVEL="-j$(_nproc)"
 
 # Forward K230 build env to the container: profile selector, per-toolchain

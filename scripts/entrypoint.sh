@@ -1,8 +1,9 @@
 #!/bin/bash
 set -e
 
-# Source toolchain functions
+# Source toolchain functions + profile resolver
 source /usr/local/bin/toolchain.sh
+source /usr/local/bin/profile.sh
 
 # ============================================
 # User mapping configuration
@@ -60,38 +61,9 @@ setup_host_config() {
 }
 
 # ============================================
-# Resolve K230_PROFILE -> ENABLE_TC* defaults
-# (explicitly-set ENABLE_TCx always wins over the profile)
-# ============================================
-resolve_profile() {
-    local p="${K230_PROFILE:-}"
-    local d1 d2 d3 d4 d5 d6
-    case "$p" in
-        nuttx)  d1=0 d2=0 d3=0 d4=0 d5=1 d6=0 ;;
-        linux)  d1=1 d2=1 d3=0 d4=0 d5=0 d6=0 ;;
-        rtos)   d1=1 d2=0 d3=1 d4=0 d5=0 d6=0 ;;
-        all)    d1=1 d2=1 d3=1 d4=0 d5=1 d6=0 ;;
-        "")     # legacy: preserve prior behavior (TC1-4 on, TC5/TC6 off)
-                d1=1 d2=1 d3=1 d4=1 d5=0 d6=0 ;;
-        *)
-            echo "[k230] warning: unknown K230_PROFILE='$p' (use nuttx|linux|rtos|all); treating as legacy"
-            d1=1 d2=1 d3=1 d4=1 d5=0 d6=0 ;;
-    esac
-    export ENABLE_TC1="${ENABLE_TC1:-$d1}"
-    export ENABLE_TC2="${ENABLE_TC2:-$d2}"
-    export ENABLE_TC3="${ENABLE_TC3:-$d3}"
-    export ENABLE_TC4="${ENABLE_TC4:-$d4}"
-    export ENABLE_TC5="${ENABLE_TC5:-$d5}"
-    export ENABLE_TC6="${ENABLE_TC6:-$d6}"
-    if [ -n "$p" ]; then
-        echo "[k230] profile '$p' -> TC1=$ENABLE_TC1 TC2=$ENABLE_TC2 TC3=$ENABLE_TC3 TC4=$ENABLE_TC4 TC5=$ENABLE_TC5 TC6=$ENABLE_TC6"
-    fi
-    return 0
-}
-
-# ============================================
 # Initialize toolchains
 # ============================================
+# (resolve_profile is defined in scripts/profile.sh, sourced above)
 init_toolchains() {
     [ "$ENABLE_TC1" = "1" ] && download_tc1
     [ "$ENABLE_TC2" = "1" ] && download_tc2
@@ -107,7 +79,8 @@ init_toolchains() {
 # ============================================
 k230_setup_env() {
     # Set HOME/USER/LOGNAME for correct gosu behavior
-    export HOME=$(getent passwd "$HOST_UID" | cut -d: -f6)
+    HOME=$(getent passwd "$HOST_UID" | cut -d: -f6)
+    export HOME
     export USER="$USERNAME"
     export LOGNAME="$USERNAME"
 
