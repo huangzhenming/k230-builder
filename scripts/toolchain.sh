@@ -100,26 +100,59 @@ check_toolchain() {
     return 0
 }
 
+# ===== Order URLs so bandwidth-sensitive origins are tried LAST =====
+# Toolchains can be ~2GB, so prefer any community/GitHub mirror and let the
+# kendryte.com / canaan-creative.com origin serve traffic only as a last-resort
+# fallback. Users can therefore keep a kendryte URL in TCx_URLS (now or later)
+# without it being the default source.
+_order_kendryte_last() {
+    local u prim=() last=()
+    for u in $1; do
+        case "$u" in
+            *kendryte.com*|*canaan-creative.com*) last+=("$u") ;;
+            *)                                    prim+=("$u") ;;
+        esac
+    done
+    printf '%s\n' "${prim[@]}" "${last[@]}"
+}
+
 # ===== Download with fallback (multiple space-separated URLs) =====
+# Each source is validated after download (non-empty + optional sha256) so a
+# partial/HTML-error/corrupt response falls through to the next source instead
+# of poisoning extraction.
 download_with_fallback() {
     local URLS=$1
     local OUTPUT=$2
+    local SHA=${3:-}
+    local url
 
-    for url in $URLS; do
+    while IFS= read -r url; do
+        [ -z "$url" ] && continue
+        rm -f "$OUTPUT"          # fresh start per source (no cross-URL resume)
         echo "[k230] downloading: $url"
-        if curl -L --fail \
+        if ! curl -L --fail \
                 --connect-timeout 30 \
                 --retry 20 \
                 --retry-delay 5 \
                 --show-error \
-                -C - -o "$OUTPUT" \
+                -o "$OUTPUT" \
                 "$url"; then
-            echo "[k230] download success"
-            return 0
+            echo "[k230] download failed, trying next source..."
+            continue
         fi
-        echo "[k230] download failed, trying next source..."
-    done
+        if [ ! -s "$OUTPUT" ]; then
+            echo "[k230] downloaded file is empty, trying next source..."
+            continue
+        fi
+        if [ -n "$SHA" ] && ! verify_sha256 "$OUTPUT" "$SHA"; then
+            echo "[k230] checksum failed for this source, trying next..."
+            continue
+        fi
+        echo "[k230] download success"
+        return 0
+    done < <(_order_kendryte_last "$URLS")
 
+    rm -f "$OUTPUT"
     echo "[k230] error: all download sources failed"
     return 1
 }
@@ -181,8 +214,8 @@ install_toolchain() {
     rm -rf "$DIR"
     mkdir -p "$TOOLCHAIN_ROOT"
 
-    # Download
-    download_with_fallback "$URLS" "$TMP"
+    # Download (validated per-source: non-empty + sha256 when configured)
+    download_with_fallback "$URLS" "$TMP" "$SHA256"
 
     # Determine extraction command
     local EXTRACT_CMD=""

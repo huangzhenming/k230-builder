@@ -41,7 +41,7 @@ else
     IMAGE="ghcr.io/huangzhenming/k230-builder:${TAG}"
 fi
 
-MIRROR="registry.kendryte.com/k230-builder:${TAG}"
+MIRROR="${K230_BUILDER_MIRROR:-registry.kendryte.com/k230-builder:${TAG}}"
 
 VOLUME="${K230_BUILDER_VOLUME:-k230_toolchains}"
 
@@ -61,68 +61,64 @@ _nproc() {
     fi
 }
 
-# ---- Ensure image is available (local-first, ghcr-first) ----
-# shellcheck disable=SC2120  # target arg is optional (defaults to $IMAGE)
-ensure_image() {
-    local target="${1:-$IMAGE}"
+# ---- Robust image fetch: ghcr first, kendryte mirror as fallback ----
+# The PULL itself is the reachability test — we deliberately do NOT probe with
+# curl first, because ghcr can answer a ping yet fail the actual layer pull
+# (rate limits, blob CDN, auth). Each source is retried and the result is
+# verified with `docker image inspect` (exit code alone isn't trusted). On
+# mirror success the image is re-tagged to the canonical (ghcr) name, so
+# everything downstream refers to ONE name regardless of where it came from.
+PULL_RETRIES="${K230_PULL_RETRIES:-2}"
+PULL_TIMEOUT="${K230_PULL_TIMEOUT:-900}"
 
-    # Already exists locally
-    if docker image inspect "$target" > /dev/null 2>&1; then
-        return 0
-    fi
-
-    echo "[k230] image $target not found locally, pulling..."
-
-    # Quick pre-check: can we even reach ghcr?
-    local ghcr_ok=0
-    if [ "$target" != "$MIRROR" ]; then
-        if _timeout 5 curl -sfI --connect-timeout 3 "https://ghcr.io/v2/" > /dev/null 2>&1; then
-            ghcr_ok=1
-        else
-            echo "[k230] ghcr.io unreachable, switching to mirror"
+# pull_source SRC CANONICAL -> 0 iff CANONICAL ends up present locally
+pull_source() {
+    local src="$1" canonical="$2" i
+    for ((i = 1; i <= PULL_RETRIES; i++)); do
+        echo "[k230] pull $src (try $i/$PULL_RETRIES)"
+        # A killed/hung pull (via _timeout) or an error both fall through to a
+        # retry, then to the next source. docker resumes cached layers.
+        if _timeout "$PULL_TIMEOUT" docker pull $DOCKER_PLATFORM "$src" \
+                && docker image inspect "$src" > /dev/null 2>&1; then
+            if [ "$src" != "$canonical" ]; then
+                docker tag "$src" "$canonical"
+                echo "[k230] tagged $src -> $canonical"
+            fi
+            return 0
         fi
-    fi
+        [ "$i" -lt "$PULL_RETRIES" ] && sleep 2
+    done
+    echo "[k230] could not pull from $src"
+    return 1
+}
 
-    # Try ghcr
-    if [ "$ghcr_ok" = "1" ] && _timeout 300 docker pull $DOCKER_PLATFORM "$target"; then
-        echo "[k230] pulled from ghcr.io"
+# ensure_image_pull CANONICAL [force] -> obtain CANONICAL locally
+ensure_image_pull() {
+    local canonical="$1" force="${2:-}"
+    if [ -z "$force" ] && docker image inspect "$canonical" > /dev/null 2>&1; then
         return 0
     fi
-
-    # Fallback: pull from mirror, then tag to canonical name
-    echo "[k230] pulling from mirror..."
-    if _timeout 600 docker pull $DOCKER_PLATFORM "$MIRROR"; then
-        if [ "$target" != "$MIRROR" ]; then
-            docker tag "$MIRROR" "$target"
-            echo "[k230] tagged $MIRROR -> $target"
-        fi
-        return 0
+    echo "[k230] fetching image $canonical ..."
+    # 1) ghcr (canonical) first — saves kendryte.com bandwidth when reachable.
+    pull_source "$canonical" "$canonical" && return 0
+    # 2) kendryte mirror as fallback, re-tagged to the canonical name.
+    if [ "$canonical" != "$MIRROR" ]; then
+        echo "[k230] ghcr unavailable, falling back to mirror $MIRROR"
+        pull_source "$MIRROR" "$canonical" && return 0
     fi
-
-    echo "[k230] error: failed to pull image from all sources"
+    echo "[k230] error: failed to obtain $canonical from all sources" >&2
     return 1
 }
 
 # ---- Handle special commands ----
 case "${1:-}" in
     pull|update)
-        PULL_IMAGE="$IMAGE"
+        # Force a (re)fetch, honoring an optional tag override for both sources.
         if [ -n "${2:-}" ]; then
-            PULL_IMAGE="${IMAGE%:*}:${2}"
+            IMAGE="${IMAGE%:*}:${2}"
+            MIRROR="${MIRROR%:*}:${2}"
         fi
-        echo "[k230] pulling $PULL_IMAGE ..."
-        docker pull $DOCKER_PLATFORM "$PULL_IMAGE" || {
-            echo "[k230] ghcr pull failed, trying mirror..."
-            docker pull $DOCKER_PLATFORM "$MIRROR" || {
-                echo "[k230] pull failed"
-                exit 1
-            }
-            if [ "$PULL_IMAGE" != "$MIRROR" ]; then
-                docker tag "$MIRROR" "$PULL_IMAGE"
-                echo "[k230] tagged $MIRROR -> $PULL_IMAGE"
-            fi
-        }
-        exit 0
+        if ensure_image_pull "$IMAGE" force; then exit 0; else exit 1; fi
         ;;
     download-toolchains)
         echo "[k230] download-toolchains not yet implemented"
@@ -145,12 +141,16 @@ case "${1:-}" in
         echo ""
         echo "  e.g.  K230_PROFILE=nuttx k230 west build"
         echo ""
+        echo "Image sources: ghcr.io (primary) -> registry.kendryte.com (mirror)."
+        echo "  Overrides: K230_BUILDER_IMAGE, K230_BUILDER_MIRROR, K230_BUILDER_TAG,"
+        echo "             K230_PULL_RETRIES, K230_PULL_TIMEOUT."
+        echo ""
         echo "Any other command is passed through to the container."
         exit 0
         ;;
 esac
 
-ensure_image
+if ! ensure_image_pull "$IMAGE"; then exit 1; fi
 
 # ---- Auto-mount host SSH keys, Git config, and Docker socket ----
 EXTRA_MOUNTS=()
