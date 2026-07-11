@@ -13,18 +13,26 @@ UIDGID=(-e "HOST_UID=$(id -u)" -e "HOST_GID=$(id -g)")
 
 echo "[smoke] image: $IMAGE"
 
+# Fail early with a clear message if the image isn't loaded (e.g. a buildx
+# --load hiccup) rather than a cryptic 'docker run' error mid-test.
+docker image inspect "$IMAGE" >/dev/null 2>&1 \
+    || { echo "[smoke] FAIL: image not found locally: $IMAGE"; exit 1; }
+
 echo "[smoke] 1/3 bundled host tools present"
 # NOTE: only image-baked tools are checked here.  Cross toolchains (TC1-6,
 # incl. riscv-none-elf-gcc) are provisioned at RUNTIME into the volume, so they
 # are intentionally NOT part of this offline smoke (see T2 for a real build).
-docker run --rm "${UIDGID[@]}" "$IMAGE" bash -c '
+# Do NOT swallow output: on failure the step log must show WHICH check failed.
+if ! docker run --rm "${UIDGID[@]}" "$IMAGE" bash -c '
 set -e
 for t in west cmake ninja dtc genromfs gperf xxd; do
     command -v "$t" >/dev/null || { echo "MISSING: $t"; exit 1; }
 done
-python3 -c "import kconfiglib, Crypto, gmssl"
-echo "  ok: $(west --version), $(cmake --version | head -1)"
-' >/dev/null || { echo "[smoke] FAIL: missing tool"; exit 1; }
+python3 -c "import kconfiglib, Crypto, gmssl" || { echo "MISSING: a python module (kconfiglib/Crypto/gmssl)"; exit 1; }
+echo "  ok: $(west --version | tr -d "\n") / $(cmake --version | head -1)"
+'; then
+    echo "[smoke] FAIL: bundled tool check"; exit 1
+fi
 
 echo "[smoke] 2/3 profile.sh resolves K230_PROFILE=nuttx -> only TC5"
 sig=$(docker run --rm -e K230_PROFILE=nuttx --entrypoint bash "$IMAGE" -c '
