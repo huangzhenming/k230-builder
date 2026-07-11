@@ -62,6 +62,7 @@ _nproc() {
 }
 
 # ---- Ensure image is available (local-first, ghcr-first) ----
+# shellcheck disable=SC2120  # target arg is optional (defaults to $IMAGE)
 ensure_image() {
     local target="${1:-$IMAGE}"
 

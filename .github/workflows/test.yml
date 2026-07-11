@@ -27,11 +27,12 @@ jobs:
           done
 
       - name: shellcheck
+        # Pin the version via the official image so CI is reproducible (apt's
+        # shellcheck version drifts across runner images and can add findings).
+        # SC1091: don't fail on sources it can't follow (e.g. /usr/local/bin/*.sh)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-          # SC1091: don't fail on sources it can't follow (e.g. /usr/local/bin/*.sh)
-          shellcheck -S warning -e SC1091 \
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
+            -S warning -e SC1091 \
             k230 build.sh install.sh \
             scripts/entrypoint.sh scripts/toolchain.sh scripts/profile.sh \
             scripts/env.sh scripts/download-toolchains scripts/list-toolchains \
@@ -44,6 +45,7 @@ jobs:
         continue-on-error: true
 
       - name: resolve_profile unit tests
+        if: always()
         run: bash tests/run.sh
 
   build-smoke:
