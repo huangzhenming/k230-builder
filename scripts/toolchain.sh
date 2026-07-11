@@ -50,7 +50,7 @@ TC5_VERSION=${TC5_VERSION:-"13.2.0-2"}
 TC5_DIR=${TC5_DIR:-"xpack-riscv-none-elf-gcc-13.2.0-2"}
 TC5_BIN=${TC5_BIN:-"riscv-none-elf-gcc"}
 TC5_BIN_FULL="bin/${TC5_BIN}"
-TC5_SHA256=${TC5_SHA256:-""}   # optional; fill to enable integrity check
+TC5_SHA256=${TC5_SHA256:-"52545afb900200fbf65fe05f7ce7090b8a42c64091f4f5d43cae6bb68ea2434a"}  # xpack v13.2.0-2 linux-x64 (verified vs official .sha)
 
 # ===== TC6: LLVM / clang for riscv (NuttX SDK, structure only) =====
 # Placeholder slot for the future LLVM switch.  Leave TC6_URLS empty to keep it
