@@ -115,6 +115,21 @@ k230_setup_env() {
 }
 
 # ============================================
+# Prepare nncase build caches (conan / NuGet)
+# ============================================
+# These live inside the persistent /opt/toolchains volume (CONAN_HOME /
+# NUGET_PACKAGES are set as image ENV) so third-party deps download once. They
+# are created as root here, then handed to the build user so it can write them.
+prepare_build_caches() {
+    local d
+    for d in "${CONAN_HOME:-}" "${NUGET_PACKAGES:-}"; do
+        [ -n "$d" ] || continue
+        mkdir -p "$d"
+        chown "$HOST_UID:$HOST_GID" "$d" 2>/dev/null || true
+    done
+}
+
+# ============================================
 # Main execution
 # ============================================
 create_user
@@ -137,19 +152,42 @@ esac
 # (Re)build PATH now that any freshly-downloaded toolchains exist on disk.
 k230_setup_env
 
+# Make the nncase conan/NuGet caches writable by the build user.
+prepare_build_caches
+
 case "${1:-}" in
     download-toolchains|list-toolchains)
         exec /usr/local/bin/"$1" "${@:2}"
         ;;
 esac
 
+# When the host docker socket is mounted (needed for `nncase wheel`, whose
+# cibuildwheel spawns sibling manylinux containers), grant the build user access
+# to it: add them to the socket's group and drop to the username form of gosu so
+# supplementary groups apply. Without a socket, behavior is byte-identical to
+# before (gosu uid:gid, no supplementary groups).
+GOSU_SPEC="$HOST_UID:$HOST_GID"
+if [ -S /var/run/docker.sock ]; then
+    SOCK_GID=$(stat -c %g /var/run/docker.sock 2>/dev/null || true)
+    if [ -n "$SOCK_GID" ]; then
+        if getent group "$SOCK_GID" >/dev/null 2>&1; then
+            SOCK_GRP=$(getent group "$SOCK_GID" | cut -d: -f1)
+        else
+            SOCK_GRP=dockersock
+            groupadd -g "$SOCK_GID" "$SOCK_GRP" 2>/dev/null || true
+        fi
+        usermod -aG "$SOCK_GID" "$USERNAME" 2>/dev/null || true
+        GOSU_SPEC="$HOST_UID"
+    fi
+fi
+
 echo "[k230] Switching to user: $USERNAME"
 if [ $# -eq 0 ]; then
-    exec gosu "$HOST_UID:$HOST_GID" env \
+    exec gosu "$GOSU_SPEC" env \
         HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" PATH="$PATH" \
         bash
 else
-    exec gosu "$HOST_UID:$HOST_GID" env \
+    exec gosu "$GOSU_SPEC" env \
         HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" PATH="$PATH" \
         "$@"
 fi

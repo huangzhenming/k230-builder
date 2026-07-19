@@ -52,6 +52,60 @@ k230 west build --list-def       # 查看可选 board/config
 `-llvm-*`）+ 目标 defconfig 打开 `CONFIG_ARCH_TOOLCHAIN_CLANG=y` 即可；OpenSBI 侧可用
 `K230_CROSS_COMPILE` 覆盖前缀。
 
+### 编译 nncase（K230 神经网络编译器 / 运行时）
+
+nncase 有**两个产物**：**host 编译器**（跑在 x86，把 ONNX/TFLite 编译成 `.kmodel`）和 **on-device 运行时**（跑在 K230，加载并执行 `.kmodel`）。所需工具已全部烤进镜像、运行时零安装：conan 2.6.0、.NET SDK 7.0.302、CMake 3.31（`/opt/cmake`，供 nncase 用；SDK 构建仍用默认 apt cmake 3.22）、ninja、`python3-dev`、`numpy`、`uuid-dev`，以及 RISC-V TC2/TC3 工具链。
+
+> nncase-k80 插件仓库**不自包含**，需要同级的基础 `nncase` 主仓（`kendryte/nncase`）。因为 `k230` 只挂载当前目录，请在**同时包含两个仓库的父目录**下运行：
+
+```bash
+work/
+├── nncase          # 基础主仓 (kendryte/nncase, 缺失时 nncase 脚本会自动 clone v2.11.0)
+└── nncase-k80      # 插件仓 (本项目, 自动探测)
+```
+
+```bash
+cd work/
+
+# 产物①：host 编译器（x86，不需要 RISC-V 工具链）
+k230 nncase compiler
+
+# 用编译器把模型编成 kmodel
+k230 nncase kmodel nncase-k80/model.onnx model.kmodel
+
+# 产物②：on-device 运行时（需对应工具链 + 已构建的 K230 SDK）
+# rtos 用 musl/TC3，linux 用 Xuantie/TC2；K230_PROFILE 会自动下载工具链
+K230_PROFILE=rtos  K230_RTOS_SDK_DIR=k230_rtos_sdk   k230 nncase runtime rtos
+K230_PROFILE=linux K230_LINUX_SDK_DIR=k230_linux_sdk k230 nncase runtime linux
+```
+
+> **运行时构建必须提供已构建的 K230 SDK 目录**（`K230_RTOS_SDK_DIR` / `K230_LINUX_SDK_DIR`）：
+> 插件的交叉工具链会把 SDK 的链接脚本 `link.lds` 注入链接参数、并链接 `libmmz`，
+> 缺失会导致连编译器自检都过不了。请先用 `k230 make` / `k230 west` 把对应 SDK 构建好，
+> 再把其目录（工作区内相对路径或绝对路径）传给上面的变量。
+
+#### 打 wheel（与 CI 一致的可分发产物）
+
+三个 wheel，和 nncase CI 的 artifacts 对应：
+
+```bash
+cd work/
+k230 nncase wheel base       # 基础 'nncase' wheel        (cibuildwheel/manylinux2014)
+k230 nncase wheel kpu        # 'nncase-kpu' 插件 wheel     (cibuildwheel/manylinux2014)
+K230_LINUX_SDK_DIR=k230_linux_sdk k230 nncase wheel runtime   # 'nncaseruntime_k230' 板上 wheel (python -m build)
+```
+
+产物落在工作区：`wheelhouse-nncase/`、`k230-wheelhouse-linux/`、`nncase_k230_runtime_wheel_linux/`。
+
+> **base / kpu wheel 用 cibuildwheel**，它会再启动 manylinux 容器来编（多 CPython 版本 cp39–cp313）。
+> 这需要**宿主 docker socket**（`k230` 已自动挂载），且 `nncase wheel` 命令会自动改用**同路径挂载**
+> （宿主 cwd 挂到容器内相同路径），以便嵌套的 manylinux 容器能正确 bind-mount 工程目录。
+> 首次会拉取 `sunnycase/manylinux2014_x86_64:1.2` 镜像。
+> 想快速冒烟只编单个 python 版本：`NNCASE_WHEEL_BUILD='cp310-*' k230 nncase wheel kpu`。
+> `runtime` wheel 用 `python -m build`，不涉及 cibuildwheel，但需要已构建的 Linux SDK。
+
+可调环境变量：`NNCASE_BASE_DIR`（基础主仓目录名，默认 `nncase`）、`NNCASE_PLUGIN_DIR`（插件仓目录名，默认自动探测）、`NNCASE_TAG`（基础主仓 clone 的 tag，默认 `v2.11.0`）、`K230_RTOS_SDK_DIR`/`K230_LINUX_SDK_DIR`。conan/NuGet 依赖缓存落在持久卷 `k230_toolchains` 内，只下载一次。
+
 ### 镜像选择
 
 | 网络环境 | 行为 |
@@ -138,8 +192,9 @@ repo sync --reference=/data/git-mirror/repos
 ├── build.sh             # 本地构建脚本
 ├── docker/Dockerfile    # 镜像定义
 ├── scripts/
-│   ├── entrypoint.sh    # 容器入口（用户创建、SSH、工具链）
+│   ├── entrypoint.sh    # 容器入口（用户创建、SSH、工具链、构建缓存）
 │   ├── toolchain.sh     # 工具链下载/校验/安装
+│   ├── nncase           # 容器内 nncase 构建 CLI（compiler / runtime / kmodel）
 │   ├── k230             # 容器内 CLI
 │   └── env.sh           # 环境变量导出
 └── .github/workflows/   # CI：tag push → GHCR + Release
