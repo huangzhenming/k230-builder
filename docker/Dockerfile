@@ -1,7 +1,7 @@
 # K230 Docker Image (Single Image - 4 Toolchains)
 #
 # Design: Single image, users control which toolchains to download at runtime
-# via ENABLE_TC{1-4} build args or environment variables.
+# via `k230 download-toolchains <name ..>`.
 #
 # Toolchains:
 #   TC1: Xuantie-900-gcc-linux-5.10.4-glibc-x86_64-V2.6.0 (RTOS U-Boot/OpenSBI)
@@ -17,10 +17,9 @@
 
 FROM ubuntu:22.04
 
-# NOTE: which toolchains get provisioned is decided at RUNTIME by
-# entrypoint.sh's resolve_profile() (K230_PROFILE + ENABLE_TC* env), NOT baked
-# in here.  Baking ENABLE_TC*=1 as image ENV would make it look "user-set" and
-# stop a profile (e.g. K230_PROFILE=nuttx) from disabling TC1-4.
+# NOTE: which toolchains get provisioned is decided at RUNTIME, by explicitly
+# running `k230 download-toolchains <TC1..TC6|linux|rtos|nuttx|...>` — NOT
+# baked in here.
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -155,17 +154,13 @@ VOLUME ["/opt/toolchains"]
 # Copy scripts
 COPY scripts/entrypoint.sh /entrypoint.sh
 COPY scripts/toolchain.sh /usr/local/bin/toolchain.sh
-COPY scripts/profile.sh /usr/local/bin/profile.sh
 COPY scripts/download-toolchains /usr/local/bin/download-toolchains
 COPY scripts/list-toolchains /usr/local/bin/list-toolchains
-COPY scripts/env.sh /usr/local/bin/env.sh
 COPY scripts/nncase /usr/local/bin/nncase
 RUN chmod +x /entrypoint.sh \
     /usr/local/bin/toolchain.sh \
-    /usr/local/bin/profile.sh \
     /usr/local/bin/download-toolchains \
     /usr/local/bin/list-toolchains \
-    /usr/local/bin/env.sh \
     /usr/local/bin/nncase
 
 ENTRYPOINT ["/entrypoint.sh"]

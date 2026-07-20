@@ -4,8 +4,8 @@
 
 | 层 | 脚本 | 内容 | 触发 |
 |---|---|---|---|
-| T0 静态+单元 | `run.sh`（+ workflow 里的 shellcheck 等） | profile 映射、工具链目录三处一致性（toolchain.sh ↔ nncase ↔ entrypoint） | 每次 commit（`test.yml`） |
-| T1 镜像 smoke | `smoke.sh` | 镜像内置工具、profile 解析、list-toolchains | 每次 commit（`test.yml`） |
+| T0 静态+单元 | `run.sh`（+ workflow 里的 shellcheck 等） | 工具链别名映射（`resolve_toolchain_set`）、工具链目录三处一致性（toolchain.sh ↔ nncase ↔ entrypoint） | 每次 commit（`test.yml`） |
+| T1 镜像 smoke | `smoke.sh` | 镜像内置工具、工具链别名解析、list-toolchains | 每次 commit（`test.yml`） |
 | T2 工具链 | `t2-toolchains.sh` | 经 `k230` CLI 下载 TC1/2/3/5（sha256 校验）→ 各自交叉编译 hello.c → readelf 断言 RISC-V | nightly |
 | T3 SDK 构建 | `t3-sdk.sh <linux\|rtos\|nuttx>` | `k230 make` / `k230 west build`，断言产出新 `*.img` | nightly |
 | T4 nncase | `t4-nncase.sh <compiler\|kmodel\|runtime-*>` | host 编译器 → `fixtures/tiny.onnx` 编成 kmodel（功能验证）→ 三种 on-device runtime | nightly |

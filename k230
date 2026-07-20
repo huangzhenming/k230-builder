@@ -120,9 +120,6 @@ case "${1:-}" in
         fi
         if ensure_image_pull "$IMAGE" force; then exit 0; else exit 1; fi
         ;;
-    download-toolchains)
-        echo "[k230] download-toolchains not yet implemented"
-        ;;
     help|--help|-h)
         echo "k230 — K230 SDK build wrapper"
         echo ""
@@ -135,15 +132,17 @@ case "${1:-}" in
         echo "  k230 nncase kmodel <in.onnx> <out>     compile a model to .kmodel"
         echo "  k230 bash                              enter container shell"
         echo "  k230 pull [tag]                        pull Docker image (default: latest)"
-        echo "  k230 download-toolchains [-l] [TC1 ..] download toolchains"
+        echo "  k230 download-toolchains <name ..>     download toolchains, see below"
         echo "  k230 help                              show this message"
         echo ""
-        echo "Toolchain profiles (env K230_PROFILE):"
-        echo "  nuttx   xPack riscv-none-elf GCC (NuttX SDK)"
-        echo "  linux   Xuantie 5.10.4 + 6.6.0        rtos  Xuantie 5.10.4 + musl"
-        echo "  all     linux + rtos + nuttx          (unset = legacy: on-demand)"
+        echo "download-toolchains accepts TC1..TC6, or these names (aliases for a TC set):"
+        echo "  linux            TC1 + TC2"
+        echo "  rtos, rt-smart   TC1 + TC3"
+        echo "  nuttx            TC5"
+        echo "  llvm             TC6"
+        echo "  all              TC1 + TC2 + TC3 + TC5"
         echo ""
-        echo "  e.g.  K230_PROFILE=nuttx k230 west build"
+        echo "  e.g.  k230 download-toolchains nuttx  &&  k230 west build"
         echo ""
         echo "Image sources: ghcr.io (primary) -> registry.kendryte.com (mirror)."
         echo "  Overrides: K230_BUILDER_IMAGE, K230_BUILDER_MIRROR, K230_BUILDER_TAG,"
@@ -177,12 +176,11 @@ fi
 # shellcheck disable=SC2034
 MAKE_J_LEVEL="-j$(_nproc)"
 
-# Forward K230 build env to the container: profile selector, per-toolchain
-# enables, and the NuttX toolchain / cross-compile overrides. Each is passed
-# through only when set on the host (docker `-e VAR` inherits the host value).
+# Forward K230 build env to the container: NuttX toolchain / cross-compile
+# overrides, nncase knobs. Each is passed through only when set on the host
+# (docker `-e VAR` inherits the host value).
 ENV_ARGS=()
-for v in K230_PROFILE K230_NUTTX_TOOLCHAIN K230_CROSS_COMPILE CROSS_COMPILE \
-         ENABLE_TC1 ENABLE_TC2 ENABLE_TC3 ENABLE_TC5 ENABLE_TC6 \
+for v in K230_NUTTX_TOOLCHAIN K230_CROSS_COMPILE CROSS_COMPILE \
          NNCASE_BASE_DIR NNCASE_PLUGIN_DIR NNCASE_TAG NNCASE_WHEEL_BUILD \
          K230_RTOS_SDK_DIR K230_LINUX_SDK_DIR K230_NUTTX_EXPORT_DIR; do
     [ -n "${!v+x}" ] && ENV_ARGS+=(-e "$v")
@@ -212,7 +210,6 @@ exec docker run $TTY_FLAGS --rm \
     --ulimit nofile=1024:2048 \
     -e HOST_UID="$(id -u)" \
     -e HOST_GID="$(id -g)" \
-    -e ENABLE_TC4="${ENABLE_TC4:-0}" \
     "${ENV_ARGS[@]}" \
     -v "${VOLUME}:/opt/toolchains" \
     -v "${WS_SRC}:${WS_DST}" \

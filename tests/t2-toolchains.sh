@@ -3,8 +3,8 @@
 #
 #   K230_CI_IMAGE=k230-builder:nightly ./tests/t2-toolchains.sh
 #
-# K230_PROFILE=all makes the entrypoint download TC1/TC2/TC3/TC5 into the CI
-# volume (sha256-verified by toolchain.sh; ~5GB on first run, then cached).
+# `k230 download-toolchains all` downloads TC1/TC2/TC3/TC5 into the CI volume
+# (sha256-verified by toolchain.sh; ~5GB on first run, then cached).
 # Each toolchain then cross-compiles hello.c and its own readelf asserts a
 # RISC-V ELF, so a bad URL/sha/extracted layout fails loudly here instead of
 # midway through a 1-hour SDK build.
@@ -29,7 +29,7 @@ cat > "$WORK/hello.c" <<'EOF'
 int main(void) { return 42; }
 EOF
 
-# Runs inside the container AFTER the entrypoint auto-provisioned the profile's
+# Runs inside the container AFTER `download-toolchains all` has provisioned the
 # toolchains. TCx_DIR come from the image's own toolchain.sh (definitions
 # only), so this never drifts from what the image actually installs. TC1/TC2
 # share a binary name, so every gcc is invoked by absolute path.
@@ -68,9 +68,11 @@ exit $rc
 EOF
 
 echo "[t2] image: $IMAGE  volume: $VOLUME"
-echo "[t2] provisioning K230_PROFILE=all toolchains (cached in volume after first run)"
+echo "[t2] provisioning toolchains via 'download-toolchains all' (cached in volume after first run)"
 cd "$WORK"
-K230_BUILDER_IMAGE="$IMAGE" K230_BUILDER_VOLUME="$VOLUME" K230_PROFILE=all \
+K230_BUILDER_IMAGE="$IMAGE" K230_BUILDER_VOLUME="$VOLUME" \
+    "$REPO/k230" download-toolchains all
+K230_BUILDER_IMAGE="$IMAGE" K230_BUILDER_VOLUME="$VOLUME" \
     "$REPO/k230" bash check.sh
 
 echo "[t2] PASS"

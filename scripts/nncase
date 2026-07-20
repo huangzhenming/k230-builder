@@ -15,9 +15,9 @@
 # repo and the nncase-k80 plugin repo, because only the current dir is mounted):
 #
 #   k230 nncase compiler
-#   K230_PROFILE=rtos  k230 nncase runtime rtos
-#   K230_PROFILE=linux k230 nncase runtime linux
-#   K230_NUTTX_EXPORT_DIR=nuttx-export k230 nncase runtime nuttx
+#   k230 download-toolchains rtos  && k230 nncase runtime rtos
+#   k230 download-toolchains linux && k230 nncase runtime linux
+#   k230 download-toolchains nuttx && K230_NUTTX_EXPORT_DIR=nuttx-export k230 nncase runtime nuttx
 #   k230 nncase kmodel model.onnx model.kmodel
 #   k230 nncase help
 #
@@ -147,7 +147,7 @@ cmd_runtime() {
         *) die "usage: nncase runtime <rtos|linux|nuttx>" ;;
     esac
     [ -d "$tc/bin" ] || die "toolchain not provisioned: $tc
-  Provision it by setting the profile, e.g.:  K230_PROFILE=$target k230 nncase runtime $target"
+  Provision it with:  k230 download-toolchains $target"
 
     ensure_conan
     export RISCV_ROOT_PATH="$tc"

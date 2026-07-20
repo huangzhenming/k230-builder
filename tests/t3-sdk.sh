@@ -60,10 +60,15 @@ marker="$(mktemp)"
 trap 'rm -f "$marker"' EXIT
 
 echo "[t3] target: $target  sdk: $dir"
-echo "[t3] build : k230 $cmd  (profile=$target, image=$IMAGE)"
-read -ra cmd_arr <<< "$cmd"
 cd "$dir"
-K230_BUILDER_IMAGE="$IMAGE" K230_BUILDER_VOLUME="$VOLUME" K230_PROFILE="$target" \
+
+echo "[t3] provisioning toolchains: download-toolchains $target"
+K230_BUILDER_IMAGE="$IMAGE" K230_BUILDER_VOLUME="$VOLUME" \
+    "$REPO/k230" download-toolchains "$target"
+
+echo "[t3] build : k230 $cmd  (image=$IMAGE)"
+read -ra cmd_arr <<< "$cmd"
+K230_BUILDER_IMAGE="$IMAGE" K230_BUILDER_VOLUME="$VOLUME" \
     "$REPO/k230" "${cmd_arr[@]}"
 
 echo "[t3] asserting fresh artifacts: $art (newer than build start, >1MB)"

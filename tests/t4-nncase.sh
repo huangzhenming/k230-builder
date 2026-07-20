@@ -84,14 +84,16 @@ case "$sub" in
     runtime-rtos)
         sdk="${K230_CI_RTOS_SDK:-k230_rtos_sdk}"
         [ -d "$WS/$sdk" ] || skip "rtos SDK dir missing: $WS/$sdk (build it with the sdk-rtos stage)"
-        run_k230 K230_PROFILE=rtos K230_RTOS_SDK_DIR="$sdk" -- nncase runtime rtos
+        run_k230 -- download-toolchains rtos
+        run_k230 K230_RTOS_SDK_DIR="$sdk" -- nncase runtime rtos
         assert_static_libs nncase_rtt_runtime
         ;;
 
     runtime-linux)
         sdk="${K230_CI_LINUX_SDK:-k230_linux_sdk}"
         [ -d "$WS/$sdk" ] || skip "linux SDK dir missing: $WS/$sdk (build it with the sdk-linux stage)"
-        run_k230 K230_PROFILE=linux K230_LINUX_SDK_DIR="$sdk" -- nncase runtime linux
+        run_k230 -- download-toolchains linux
+        run_k230 K230_LINUX_SDK_DIR="$sdk" -- nncase runtime linux
         assert_static_libs nncase_linux_runtime
         ;;
 
@@ -99,7 +101,8 @@ case "$sub" in
         exp="${K230_CI_NUTTX_EXPORT:-}"
         [ -n "$exp" ] || skip "K230_CI_NUTTX_EXPORT not set (NuttX export sysroot) — stage disabled"
         [ -d "$WS/$exp/include" ] || skip "not an export sysroot (no include/): $WS/$exp"
-        run_k230 K230_PROFILE=nuttx K230_NUTTX_EXPORT_DIR="$exp" -- nncase runtime nuttx
+        run_k230 -- download-toolchains nuttx
+        run_k230 K230_NUTTX_EXPORT_DIR="$exp" -- nncase runtime nuttx
         assert_static_libs nncase_nuttx_runtime
         ;;
 

@@ -1,10 +1,6 @@
 #!/bin/bash
 set -e
 
-# Source toolchain functions + profile resolver
-source /usr/local/bin/toolchain.sh
-source /usr/local/bin/profile.sh
-
 # ============================================
 # User mapping configuration
 # ============================================
@@ -58,20 +54,6 @@ setup_host_config() {
         chown "$HOST_UID:$HOST_GID" "$home_dir/.gitconfig"
         echo "[k230] Git config loaded from host"
     fi
-}
-
-# ============================================
-# Initialize toolchains
-# ============================================
-# (resolve_profile is defined in scripts/profile.sh, sourced above)
-init_toolchains() {
-    [ "$ENABLE_TC1" = "1" ] && download_tc1
-    [ "$ENABLE_TC2" = "1" ] && download_tc2
-    [ "$ENABLE_TC3" = "1" ] && download_tc3
-    [ "$ENABLE_TC4" = "1" ] && download_tc4
-    [ "$ENABLE_TC5" = "1" ] && download_tc5
-    [ "$ENABLE_TC6" = "1" ] && download_tc6
-    return 0
 }
 
 # ============================================
@@ -135,19 +117,6 @@ prepare_build_caches() {
 create_user
 
 setup_host_config
-
-# Resolve K230_PROFILE -> ENABLE_TC* (exported; inherited by the
-# download-toolchains exec below and by init_toolchains).
-resolve_profile
-
-# When a profile is explicitly requested, auto-provision its toolchains so
-# `K230_PROFILE=nuttx k230 west build` works in one shot.  With no profile
-# (legacy), provisioning stays on-demand via `k230 download-toolchains`.
-# Skip auto-provision for the toolchain management commands themselves.
-case "${1:-}" in
-    download-toolchains|list-toolchains) ;;
-    *) [ -n "${K230_PROFILE:-}" ] && init_toolchains ;;
-esac
 
 # (Re)build PATH now that any freshly-downloaded toolchains exist on disk.
 k230_setup_env
