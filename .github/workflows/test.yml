@@ -22,7 +22,7 @@ jobs:
           for f in k230 build.sh install.sh \
                    scripts/entrypoint.sh scripts/toolchain.sh scripts/profile.sh \
                    scripts/env.sh scripts/download-toolchains scripts/list-toolchains \
-                   tests/run.sh tests/smoke.sh; do
+                   scripts/nncase tests/*.sh; do
             echo "bash -n $f"; bash -n "$f"
           done
 
@@ -36,7 +36,7 @@ jobs:
             k230 build.sh install.sh \
             scripts/entrypoint.sh scripts/toolchain.sh scripts/profile.sh \
             scripts/env.sh scripts/download-toolchains scripts/list-toolchains \
-            tests/run.sh tests/smoke.sh
+            scripts/nncase tests/*.sh
 
       - name: hadolint (advisory)
         uses: hadolint/hadolint-action@v3.1.0

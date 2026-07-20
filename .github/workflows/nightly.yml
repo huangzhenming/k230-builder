@@ -1,0 +1,46 @@
+name: Nightly
+
+# Full regression pipeline on the self-hosted runner (label: k230-builder):
+#   image -> smoke -> unit -> toolchains -> sdk-{linux,rtos,nuttx}
+#         -> nncase-{compiler,kmodel,runtime-rtos,runtime-linux,runtime-nuttx}
+# tests/report.sh writes a Markdown report to the job summary + reports/;
+# scheduled failures open a 'regression' issue with the report as body.
+# Runner setup & tests/ci.env: see tests/README.md.
+
+on:
+  schedule:
+    - cron: '23 19 * * *'   # 03:23 Beijing, off the :00 spike
+  workflow_dispatch:
+    inputs:
+      stages:
+        description: 'stages to run, space-separated (empty = all), e.g. "toolchains sdk-nuttx"'
+        required: false
+        default: ''
+
+jobs:
+  nightly:
+    runs-on: [self-hosted, k230-builder]
+    timeout-minutes: 480
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: regression pipeline + report
+        run: bash tests/report.sh ${{ github.event.inputs.stages }}
+
+      - name: upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-report-${{ github.run_number }}
+          path: |
+            reports/latest.md
+            reports/latest-logs/
+          if-no-files-found: warn
+
+      - name: open issue on scheduled failure
+        if: failure() && github.event_name == 'schedule'
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: 'Nightly regression failed (${{ github.run_id }})'
+          content-filepath: reports/latest.md
+          labels: regression

@@ -16,3 +16,7 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+
+# CI regression pipeline (tests/report.sh)
+reports/
+tests/ci.env
