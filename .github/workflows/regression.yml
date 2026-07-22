@@ -26,10 +26,10 @@ jobs:
       # actions/checkout does `git clean -ffdx` before every checkout, which
       # wipes gitignored files — so tests/ci.env can't just live in the repo
       # checkout across runs. Keep the real copy outside any checkout, at the
-      # runner install dir (one level above $RUNNER_WORKSPACE, i.e. sibling
-      # of _work/), and re-stage it here every run.
+      # runner install dir. $RUNNER_WORKSPACE is <runner-root>/_work/<repo>,
+      # so the runner root is two levels up.
       - name: stage tests/ci.env
-        run: cp "${RUNNER_WORKSPACE}/../ci.env" tests/ci.env
+        run: cp "${RUNNER_WORKSPACE}/../../ci.env" tests/ci.env
 
       - name: regression pipeline + report
         run: bash tests/report.sh ${{ github.event.inputs.stages }}
