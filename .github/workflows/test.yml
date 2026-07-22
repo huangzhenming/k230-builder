@@ -1,8 +1,8 @@
 name: Test
 
 # Per-commit functional gate for k230-builder.
-#   T0 static : bash -n, shellcheck, hadolint (advisory), resolve_profile unit tests
-#   T1 smoke  : build the image + assert bundled tools & profile resolution
+#   T0 static : bash -n, shellcheck, hadolint (advisory), resolve_toolchain_set unit tests
+#   T1 smoke  : build the image + assert bundled tools & toolchain alias resolution
 # Heavy SDK builds (Linux/rt-smart full compiles) are intentionally out of scope
 # here — they need a self-hosted runner / toolchain cache (see a future T2/T3).
 
@@ -20,9 +20,9 @@ jobs:
       - name: bash -n (syntax)
         run: |
           for f in k230 build.sh install.sh \
-                   scripts/entrypoint.sh scripts/toolchain.sh scripts/profile.sh \
-                   scripts/env.sh scripts/download-toolchains scripts/list-toolchains \
-                   tests/run.sh tests/smoke.sh; do
+                   scripts/entrypoint.sh scripts/toolchain.sh \
+                   scripts/download-toolchains scripts/list-toolchains \
+                   scripts/nncase tests/*.sh; do
             echo "bash -n $f"; bash -n "$f"
           done
 
@@ -34,9 +34,9 @@ jobs:
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
             -S warning -e SC1091 \
             k230 build.sh install.sh \
-            scripts/entrypoint.sh scripts/toolchain.sh scripts/profile.sh \
-            scripts/env.sh scripts/download-toolchains scripts/list-toolchains \
-            tests/run.sh tests/smoke.sh
+            scripts/entrypoint.sh scripts/toolchain.sh \
+            scripts/download-toolchains scripts/list-toolchains \
+            scripts/nncase tests/*.sh
 
       - name: hadolint (advisory)
         uses: hadolint/hadolint-action@v3.1.0
@@ -44,7 +44,7 @@ jobs:
           dockerfile: docker/Dockerfile
         continue-on-error: true
 
-      - name: resolve_profile unit tests
+      - name: resolve_toolchain_set unit tests
         if: always()
         run: bash tests/run.sh
 

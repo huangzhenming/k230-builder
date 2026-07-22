@@ -1,0 +1,45 @@
+name: Regression
+
+# Full regression pipeline on the self-hosted runner (label: k230-builder):
+#   image -> smoke -> unit -> toolchains -> sdk-{linux,rtos,nuttx}
+#         -> nncase-{compiler,kmodel,runtime-rtos,runtime-linux,runtime-nuttx}
+# Manual only (k230-builder doesn't change often, so no schedule) — run it
+# after a change you want the heavy SDK/nncase stages to cover.
+# tests/report.sh writes a Markdown report to the job summary + reports/.
+# Runner setup & tests/ci.env: see tests/README.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      stages:
+        description: 'stages to run, space-separated (empty = all), e.g. "toolchains sdk-nuttx"'
+        required: false
+        default: ''
+
+jobs:
+  regression:
+    runs-on: [self-hosted, k230-builder]
+    timeout-minutes: 480
+    steps:
+      - uses: actions/checkout@v4
+
+      # actions/checkout does `git clean -ffdx` before every checkout, which
+      # wipes gitignored files — so tests/ci.env can't just live in the repo
+      # checkout across runs. Keep the real copy outside any checkout, at the
+      # runner install dir (one level above $RUNNER_WORKSPACE, i.e. sibling
+      # of _work/), and re-stage it here every run.
+      - name: stage tests/ci.env
+        run: cp "${RUNNER_WORKSPACE}/../ci.env" tests/ci.env
+
+      - name: regression pipeline + report
+        run: bash tests/report.sh ${{ github.event.inputs.stages }}
+
+      - name: upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-report-${{ github.run_number }}
+          path: |
+            reports/latest.md
+            reports/latest-logs/
+          if-no-files-found: warn

@@ -4,8 +4,8 @@
 #   ./tests/smoke.sh [image]      (default: k230-builder:latest)
 #
 # Verifies: entrypoint runs, the NuttX/SDK host tools are bundled, and the
-# baked profile.sh resolves K230_PROFILE correctly.  No K230_PROFILE is set for
-# the tool check, so the entrypoint does NOT auto-provision toolchains (fast).
+# baked toolchain.sh resolves toolchain aliases correctly.  No toolchains are
+# downloaded here (fast) — see T2 for a real provisioning + build.
 
 set -euo pipefail
 IMAGE="${1:-k230-builder:latest}"
@@ -23,24 +23,28 @@ echo "[smoke] 1/3 bundled host tools present"
 # incl. riscv-none-elf-gcc) are provisioned at RUNTIME into the volume, so they
 # are intentionally NOT part of this offline smoke (see T2 for a real build).
 # Do NOT swallow output: on failure the step log must show WHICH check failed.
+# kconfiglib lives in an isolated venv (docker/Dockerfile) so its flat
+# menuconfig.py/olddefconfig.py modules do not collide with same-named
+# modules in other SDK build systems; only its console scripts are exposed
+# on PATH, so check those instead of "import kconfiglib" against the global
+# python3 (which is intentionally absent there).
 if ! docker run --rm "${UIDGID[@]}" "$IMAGE" bash -c '
 set -e
-for t in west cmake ninja dtc genromfs gperf xxd; do
+for t in west cmake ninja dtc genromfs gperf xxd menuconfig olddefconfig; do
     command -v "$t" >/dev/null || { echo "MISSING: $t"; exit 1; }
 done
-python3 -c "import kconfiglib, Crypto, gmssl" || { echo "MISSING: a python module (kconfiglib/Crypto/gmssl)"; exit 1; }
+python3 -c "import Crypto, gmssl" || { echo "MISSING: a python module (Crypto/gmssl)"; exit 1; }
 echo "  ok: $(west --version | tr -d "\n") / $(cmake --version | head -1)"
 '; then
     echo "[smoke] FAIL: bundled tool check"; exit 1
 fi
 
-echo "[smoke] 2/3 profile.sh resolves K230_PROFILE=nuttx -> only TC5"
-sig=$(docker run --rm -e K230_PROFILE=nuttx --entrypoint bash "$IMAGE" -c '
-    source /usr/local/bin/profile.sh
-    resolve_profile >/dev/null 2>&1
-    printf "%s%s%s%s%s%s" "$ENABLE_TC1" "$ENABLE_TC2" "$ENABLE_TC3" "$ENABLE_TC4" "$ENABLE_TC5" "$ENABLE_TC6"')
-[ "$sig" = "000010" ] || { echo "[smoke] FAIL: nuttx profile sig=$sig want=000010"; exit 1; }
-echo "  ok: nuttx -> $sig"
+echo "[smoke] 2/3 toolchain.sh resolves 'nuttx' -> tc5"
+out=$(docker run --rm --entrypoint bash "$IMAGE" -c '
+    source /usr/local/bin/toolchain.sh
+    resolve_toolchain_set nuttx')
+[ "$out" = "tc5" ] || { echo "[smoke] FAIL: nuttx -> $out want=tc5"; exit 1; }
+echo "  ok: nuttx -> $out"
 
 echo "[smoke] 3/3 list-toolchains advertises TC5/TC6"
 docker run --rm --entrypoint list-toolchains "$IMAGE" | grep -q "TC5" \

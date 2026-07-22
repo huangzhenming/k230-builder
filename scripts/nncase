@@ -1,0 +1,349 @@
+#!/bin/bash
+# nncase — build the nncase (K230) neural-network compiler & runtime INSIDE the
+# k230-builder container. All tools (conan, .NET SDK, cmake, ninja, RISC-V
+# toolchains) are baked into the image; nothing is installed at runtime.
+#
+# Two products (see docs):
+#   compiler                  the host compiler that turns ONNX/TFLite -> .kmodel
+#                             (runs on x86, C#/.NET; needs no RISC-V toolchain)
+#   runtime <rtos|linux|nuttx> the on-device runtime that RUNS a .kmodel on K230
+#                             (RISC-V; rtos=musl/TC3, linux=Xuantie/TC2,
+#                             nuttx=bare-metal xPack riscv-none-elf/TC5, static
+#                             .a only, headers from a NuttX export sysroot)
+#
+# Usage (run `k230` from the parent workspace that holds BOTH the base nncase
+# repo and the nncase-k80 plugin repo, because only the current dir is mounted):
+#
+#   k230 nncase compiler
+#   k230 download-toolchains rtos  && k230 nncase runtime rtos
+#   k230 download-toolchains linux && k230 nncase runtime linux
+#   k230 download-toolchains nuttx && K230_NUTTX_EXPORT_DIR=nuttx-export k230 nncase runtime nuttx
+#   k230 nncase kmodel model.onnx model.kmodel
+#   k230 nncase help
+#
+# Layout resolution (all relative to the mounted /workspace):
+#   base repo   : $NNCASE_BASE_DIR    (default: nncase; auto-cloned if missing)
+#   plugin repo : $NNCASE_PLUGIN_DIR  (default: auto-detected — the dir that
+#                                      contains modules/Nncase.Modules.K230)
+#   SDK dirs    : $K230_RTOS_SDK_DIR / $K230_LINUX_SDK_DIR  (optional; needed
+#                 only to build the on-board test executables/examples)
+
+set -euo pipefail
+
+# WORKSPACE is /workspace by default, but wheel builds run with a same-path mount
+# (host path == container path) so cibuildwheel's nested manylinux containers can
+# bind-mount the project; the k230 wrapper then passes K230_WORKSPACE.
+WORKSPACE="${K230_WORKSPACE:-/workspace}"
+NNCASE_TAG="${NNCASE_TAG:-v2.11.0}"
+BASE_DIR_NAME="${NNCASE_BASE_DIR:-nncase}"
+
+# Toolchain dirs baked/provisioned by k230-builder (must match toolchain.sh)
+TC_RTOS="/opt/toolchains/riscv64-linux-musleabi_for_x86_64-pc-linux-gnu"
+TC_LINUX="/opt/toolchains/Xuantie-900-gcc-linux-6.6.0-glibc-x86_64-V3.0.2"
+TC_NUTTX="/opt/toolchains/xpack-riscv-none-elf-gcc-13.2.0-2"   # TC5, bare-metal
+
+HOST_PROFILE="toolchains/x86_64-linux.profile.jinja"
+
+# conan 2.6 CMakePresets need cmake >= 3.25; use the modern cmake baked at
+# /opt/cmake (the default apt cmake 3.22 is reserved for the SDK builds).
+[ -d /opt/cmake/bin ] && export PATH="/opt/cmake/bin:$PATH"
+
+# log to stderr so it never pollutes $(resolve_base)/$(resolve_plugin) captures
+log()  { echo "[nncase] $*" >&2; }
+die()  { echo "[nncase] error: $*" >&2; exit 1; }
+
+# --- locate the two repos --------------------------------------------------
+resolve_base() {
+    local base="$WORKSPACE/$BASE_DIR_NAME"
+    if [ ! -d "$base" ]; then
+        log "base nncase repo not found at '$base' — cloning kendryte/nncase@$NNCASE_TAG"
+        git clone --depth 1 --branch "$NNCASE_TAG" \
+            https://github.com/kendryte/nncase.git "$base" \
+            || die "failed to clone base nncase (need network + git)."
+    fi
+    [ -f "$base/CMakeLists.txt" ] || die "'$base' is not a valid nncase repo."
+    printf '%s' "$base"
+}
+
+resolve_plugin() {
+    if [ -n "${NNCASE_PLUGIN_DIR:-}" ]; then
+        local p="$WORKSPACE/$NNCASE_PLUGIN_DIR"
+        [ -d "$p/modules/Nncase.Modules.K230" ] \
+            || die "NNCASE_PLUGIN_DIR='$NNCASE_PLUGIN_DIR' has no modules/Nncase.Modules.K230."
+        printf '%s' "$p"; return
+    fi
+    # cwd itself is the plugin repo?
+    if [ -d "$WORKSPACE/modules/Nncase.Modules.K230" ]; then
+        printf '%s' "$WORKSPACE"; return
+    fi
+    # otherwise scan immediate subdirs
+    local d
+    for d in "$WORKSPACE"/*/; do
+        if [ -d "${d}modules/Nncase.Modules.K230" ]; then
+            printf '%s' "${d%/}"; return
+        fi
+    done
+    die "cannot find the nncase-k80 plugin repo (a dir with modules/Nncase.Modules.K230). Set NNCASE_PLUGIN_DIR."
+}
+
+# --- ensure conan is usable (config only, no install) ----------------------
+ensure_conan() {
+    [ -f "$CONAN_HOME/profiles/default" ] || conan profile detect --force >/dev/null 2>&1 || true
+    conan remote add sunnycase https://conan.sunnycase.moe --index 0 --force >/dev/null 2>&1 || true
+}
+
+# --- product 1: host compiler (ONNX -> kmodel) -----------------------------
+cmd_compiler() {
+    ensure_conan
+    local base plugin install
+    base="$(resolve_base)"
+    plugin="$(resolve_plugin)"
+    install="$base/nncase-native"
+    log "base repo   : $base"
+    log "plugin repo : $plugin"
+
+    log "[1/3] building base nncase native (x86)"
+    ( cd "$base"
+      rm -rf build CMakeUserPresets.json
+      conan install . --build=missing -s build_type=Release -pr:a="$HOST_PROFILE" \
+          -o "&:runtime=False" -o "&:python=True" -o "&:tests=False"
+      cmake --preset conan-release
+      cmake --build build/Release --config Release
+      cmake --install build/Release --prefix="$install" )
+
+    log "[2/3] building k80 native GNNE simulator (nncase.simulator.k230)"
+    ( cd "$plugin"
+      rm -rf build CMakeUserPresets.json
+      conan install . --build=missing -s build_type=Release -pr:a="$HOST_PROFILE" \
+          -o "&:nncase_dir=$install/lib/cmake/nncase" \
+          -o "&:runtime=False" -o "&:python=True" -o "&:tests=False"
+      cmake --preset conan-release
+      cmake --build build/Release --config Release
+      cmake --install build/Release --prefix="$install" )
+
+    log "[3/3] building C# compiler + K230 plugin (dotnet)"
+    ( cd "$plugin"
+      dotnet restore
+      dotnet build -c Release --no-restore )
+
+    log "compiler build complete."
+    log "  NNCASE_COMPILER=$base/src/Nncase.Compiler/bin/Release/net7.0/Nncase.Compiler.dll"
+    log "  NNCASE_PLUGIN_PATH=$plugin/modules/Nncase.Modules.K230/bin/Release/net7.0"
+    log "  LD_LIBRARY_PATH+=$install/lib"
+    log "Compile a model with:  k230 nncase kmodel <in.onnx> <out.kmodel>"
+}
+
+# --- product 2: on-device runtime ------------------------------------------
+cmd_runtime() {
+    local target="${1:-}"
+    local tc profile sdkvar install bf
+    case "$target" in
+        rtos)  tc="$TC_RTOS";  profile="toolchains/riscv64-k230-rtos.profile.jinja"
+               sdkvar="K230_RTOS_SDK_DIR";  install="$WORKSPACE/nncase_rtt_runtime";   bf="rtos_runtime_build" ;;
+        linux) tc="$TC_LINUX"; profile="toolchains/riscv64-k230-linux.profile.jinja"
+               sdkvar="K230_LINUX_SDK_DIR"; install="$WORKSPACE/nncase_linux_runtime"; bf="linux_runtime_build" ;;
+        nuttx) tc="$TC_NUTTX"; profile="toolchains/riscv64-k230-nuttx.profile.jinja"
+               sdkvar="K230_NUTTX_EXPORT_DIR"; install="$WORKSPACE/nncase_nuttx_runtime"; bf="nuttx_runtime_build" ;;
+        *) die "usage: nncase runtime <rtos|linux|nuttx>" ;;
+    esac
+    [ -d "$tc/bin" ] || die "toolchain not provisioned: $tc
+  Provision it with:  k230 download-toolchains $target"
+
+    ensure_conan
+    export RISCV_ROOT_PATH="$tc"
+    export PATH="$tc/bin:$PATH"
+
+    local base plugin
+    base="$(resolve_base)"
+    plugin="$(resolve_plugin)"
+    log "base repo   : $base"
+    log "plugin repo : $plugin"
+    log "toolchain   : $tc"
+
+    # rtos/linux: the k80 toolchain injects the SDK's linker script
+    #   (-T <SDK>/.../link.lds), so a built K230 SDK dir is REQUIRED — without it
+    #   even cmake's compiler check fails to link.
+    # nuttx: no linker script (we only emit .a; NuttX links them into its FLAT
+    #   image). Instead the toolchain needs a NuttX *export sysroot* (headers +
+    #   config.h + libcxx), produced by 'k230 export nuttx' in the NuttX SDK.
+    local sdkdir="${!sdkvar:-}"
+    if [ "$target" = nuttx ]; then
+        [ -n "$sdkdir" ] || die "$sdkvar is required for 'runtime nuttx'.
+  It must point to a NuttX export sysroot (include/ + include/libcxx/), e.g.:
+      $sdkvar=nuttx-export  k230 nncase runtime nuttx
+  Produce it from the NuttX SDK first:  k230 export nuttx  (see k230/tools/nuttx_export.sh)."
+    else
+        [ -n "$sdkdir" ] || die "$sdkvar is required for 'runtime $target'.
+  It must point to a built K230 ${target^^} SDK (providing link.lds + libmmz), e.g.:
+      $sdkvar=k230_${target}_sdk  k230 nncase runtime $target
+  (path is relative to the mounted workspace, or absolute). Build that SDK first
+  with 'k230 make' / 'k230 west' as usual."
+    fi
+    case "$sdkdir" in /*) : ;; *) sdkdir="$WORKSPACE/$sdkdir" ;; esac
+    [ -d "$sdkdir" ] || die "$sdkvar='$sdkdir' does not exist (must be under the mounted workspace)."
+    if [ "$target" = nuttx ]; then
+        [ -d "$sdkdir/include" ] || die "$sdkvar='$sdkdir' has no include/ — not a NuttX export sysroot (run 'k230 export nuttx')."
+        # The NuttX toolchain reads this from the environment (not a conan -o).
+        export K230_NUTTX_EXPORT_DIR="$sdkdir"
+    fi
+
+    mkdir -p "$install"; rm -rf "${install:?}/"*
+
+    log "[1/2] building base nncase runtime ($target)"
+    ( cd "$base"
+      rm -rf "$bf" CMakeUserPresets.json
+      conan install . --build=missing -s build_type=Release \
+          -pr:h="$profile" -pr:b="$HOST_PROFILE" \
+          -o "&:runtime=True" -o "&:python=False" -o "&:tests=False" \
+          -c "tools.cmake.cmake_layout:build_folder=$bf"
+      cmake --preset conan-runtime-release
+      cmake --build "$bf/Release" --config Release
+      cmake --install "$bf/Release" --prefix="$install" )
+
+    log "[2/2] building k80 K230 runtime ($target)"
+    # rtos/linux forward the SDK dir as a conan option (the plugin conanfile
+    # turns it into the -T link.lds flag). nuttx has no such option — its
+    # toolchain reads K230_NUTTX_EXPORT_DIR from the environment (exported above).
+    local sdkopt=()
+    [ "$target" != nuttx ] && [ -n "$sdkdir" ] && sdkopt=(-o "&:$sdkvar=$sdkdir")
+    ( cd "$plugin"
+      rm -rf "$bf" CMakeUserPresets.json
+      conan install . --build=missing -s build_type=Release \
+          -pr:h="$profile" -pr:b="$HOST_PROFILE" \
+          -o "&:runtime=True" \
+          -o "&:nncaseruntime_DIR=$install/lib/cmake/nncaseruntime" \
+          -o "&:nncasefunctional_DIR=$install/lib/cmake/nncasefunctional" \
+          "${sdkopt[@]}" \
+          -c "tools.cmake.cmake_layout:build_folder=$bf"
+      cmake --preset conan-runtime-release
+      cmake --build "$bf/Release" --config Release
+      cmake --install "$bf/Release" --prefix="$install"
+      [ -d "$bf/Release/bin" ] && cp -r "$bf/Release/bin" "$install/" || true )
+
+    log "runtime ($target) build complete -> $install"
+}
+
+# --- convenience: actually compile a model with the built compiler ---------
+cmd_kmodel() {
+    local model="${1:-}" out="${2:-}" target="${3:-k230}"
+    [ -n "$model" ] && [ -n "$out" ] || die "usage: nncase kmodel <in.onnx> <out.kmodel> [target]"
+    [ -f "$model" ] || die "model not found: $model"
+    local base plugin install
+    base="$(resolve_base)"; plugin="$(resolve_plugin)"; install="$base/nncase-native"
+    local dll="$base/src/Nncase.Compiler/bin/Release/net7.0/Nncase.Compiler.dll"
+    [ -f "$dll" ] || die "compiler not built yet — run 'k230 nncase compiler' first."
+
+    export NNCASE_COMPILER="$dll"
+    export NNCASE_PLUGIN_PATH="$plugin/modules/Nncase.Modules.K230/bin/Release/net7.0"
+    export LD_LIBRARY_PATH="$install/lib:${LD_LIBRARY_PATH:-}"
+    export PYTHONPATH="$base/python:$install/lib:${PYTHONPATH:-}"
+
+    log "compiling $model -> $out (target=$target)"
+    python3 - "$model" "$out" "$target" <<'PY'
+import sys, nncase
+model, out, target = sys.argv[1], sys.argv[2], sys.argv[3]
+co = nncase.CompileOptions(); co.target = target
+c = nncase.Compiler(co)
+data = open(model, 'rb').read()
+if model.endswith('.tflite'):
+    c.import_tflite(data, nncase.ImportOptions())
+else:
+    c.import_onnx(data, nncase.ImportOptions())
+c.compile()
+open(out, 'wb').write(c.gencode_tobytes())
+print(f"[nncase] wrote {out}")
+PY
+}
+
+# --- distributable wheels (faithful to nncase CI) --------------------------
+# base + kpu wheels use cibuildwheel (manylinux2014, cp39-cp313). They spawn
+# sibling manylinux containers via docker.sock, so this must run under the
+# same-path mount (the k230 wrapper arranges it for `nncase wheel`).
+# Optional: NNCASE_WHEEL_BUILD limits CPython versions (maps to CIBW_BUILD),
+# e.g. NNCASE_WHEEL_BUILD='cp310-*' for a quick single-version smoke.
+require_samepath() {
+    case "$WORKSPACE" in
+        /workspace) die "'nncase wheel' needs the same-path mount. The k230 wrapper sets it automatically; if you invoked docker directly, mount -v \"\$PWD:\$PWD\" -w \"\$PWD\"." ;;
+    esac
+    [ -S /var/run/docker.sock ] || die "cibuildwheel needs the host docker socket. The k230 wrapper mounts it; ensure /var/run/docker.sock is accessible."
+}
+
+cmd_wheel() {
+    local kind="${1:-}"
+    ensure_conan
+    [ -n "${NNCASE_WHEEL_BUILD:-}" ] && export CIBW_BUILD="$NNCASE_WHEEL_BUILD"
+    local base plugin
+    base="$(resolve_base)"; plugin="$(resolve_plugin)"
+    case "$kind" in
+        base)    require_samepath; wheel_base "$base" ;;
+        kpu)     require_samepath; wheel_kpu "$base" "$plugin" ;;
+        runtime) wheel_runtime "$plugin" ;;
+        *) die "usage: nncase wheel <base|kpu|runtime>
+  base     -> the base 'nncase' compiler wheel   (cibuildwheel/manylinux)
+  kpu      -> the 'nncase-kpu' K230 plugin wheel (cibuildwheel/manylinux)
+  runtime  -> the 'nncaseruntime_k230' device wheel (python -m build; needs K230_LINUX_SDK_DIR)" ;;
+    esac
+}
+
+wheel_base() {
+    local base="$1" out="$WORKSPACE/wheelhouse-nncase"
+    log "[base wheel 1/2] dotnet publish Nncase.Compiler (linux-x64)"
+    ( cd "$base"
+      dotnet restore -r linux-x64
+      dotnet publish src/Nncase.Compiler -c Release --no-restore --sc false -r linux-x64
+      # base setup.py copies the published compiler from ./install (CI downloads it there)
+      rm -rf install && mkdir -p install
+      cp -r src/Nncase.Compiler/bin/Release/net7.0/linux-x64/publish/. install/ )
+    log "[base wheel 2/2] cibuildwheel (manylinux2014)"
+    mkdir -p "$out"
+    ( cd "$base"; rm -f CMakeUserPresets.json
+      cibuildwheel --output-dir "$out" --platform linux )
+    log "base 'nncase' wheels -> $out"; ls "$out"
+}
+
+wheel_kpu() {
+    local base="$1" plugin="$2" out="$WORKSPACE/k230-wheelhouse-linux"
+    log "[kpu wheel 1/4] dotnet publish base Nncase.Compiler (linux-x64)"
+    ( cd "$base"
+      dotnet restore -r linux-x64
+      dotnet publish src/Nncase.Compiler -c Release --no-restore --sc false -r linux-x64 )
+    log "[kpu wheel 2/4] dotnet publish Nncase.Modules.K230 (linux-x64)"
+    ( cd "$plugin"
+      dotnet restore -r linux-x64
+      dotnet publish modules/Nncase.Modules.K230 -c Release --no-restore --sc false -r linux-x64 )
+    log "[kpu wheel 3/4] stage base repo into plugin/nncase (CI does 'mv ../nncase .')"
+    rm -rf "$plugin/nncase"
+    rsync -a --exclude '.git' --exclude 'build' --exclude '*_runtime_build' \
+             --exclude 'nncase-native' "$base/" "$plugin/nncase/"
+    log "[kpu wheel 4/4] cibuildwheel (manylinux2014)"
+    mkdir -p "$out"
+    ( cd "$plugin"; rm -f CMakeUserPresets.json
+      cibuildwheel --output-dir "$out" --platform linux )
+    log "'nncase-kpu' wheels -> $out"; ls "$out"
+}
+
+wheel_runtime() {
+    local plugin="$1" out="$WORKSPACE/nncase_k230_runtime_wheel_linux"
+    log "[runtime wheel 1/2] build nncase_linux_runtime"
+    cmd_runtime linux
+    log "[runtime wheel 2/2] python -m build (nncaseruntime_k230)"
+    export NNCASE_RUNTIME_LIB="$WORKSPACE/nncase_linux_runtime"
+    mkdir -p "$out"
+    ( cd "$plugin/python"
+      python3 -m build
+      cp dist/*.whl "$out/" )
+    log "'nncaseruntime_k230' wheel -> $out"; ls "$out"
+}
+
+usage() {
+    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+case "${1:-help}" in
+    compiler) shift; cmd_compiler "$@" ;;
+    runtime)  shift; cmd_runtime "$@" ;;
+    kmodel)   shift; cmd_kmodel "$@" ;;
+    wheel)    shift; cmd_wheel "$@" ;;
+    help|-h|--help) usage ;;
+    *) die "unknown subcommand '$1' (try: compiler | runtime <rtos|linux> | wheel <base|kpu|runtime> | kmodel | help)" ;;
+esac

@@ -4,11 +4,6 @@ set -u
 
 TOOLCHAIN_ROOT=${K230_TOOLCHAIN_ROOT:-/opt/toolchains}
 
-# NOTE: do NOT default ENABLE_TC* here.  entrypoint.sh's resolve_profile()
-# (via K230_PROFILE) and download-toolchains own that defaulting; pre-setting
-# them to 1 here would make a profile like K230_PROFILE=nuttx unable to
-# disable TC1-4.
-
 # ===== TC1: Xuantie-900 gcc 5.10.4 (glibc, bz2) =====
 TC1_URLS=${TC1_URLS:-"https://kendryte-download.canaan-creative.com/k230/toolchain/Xuantie-900-gcc-linux-5.10.4-glibc-x86_64-V2.6.0.tar.bz2"}
 TC1_VERSION=${TC1_VERSION:-"V2.6.0"}
@@ -364,33 +359,22 @@ download_tc6() {
         "${TC6_EXT:-xz}"
 }
 
-# ===== Legacy compatibility =====
-download_toolchain() {
-    local NAME=${1:-}
-
-    case $NAME in
-        tc1)  download_tc1 ;;
-        tc2)  download_tc2 ;;
-        tc3)  download_tc3 ;;
-        tc4)  download_tc4 ;;
-        tc5)  download_tc5 ;;
-        tc6)  download_tc6 ;;
-        linux)  download_tc2 ;;
-        rtos)   download_tc3 ;;
-        nuttx)  download_tc5 ;;
-        llvm)   download_tc6 ;;
-        all)
-            download_tc1
-            download_tc2
-            download_tc3
-            download_tc4
-            download_tc5
-            ;;
-        *)
-            echo "[k230] error: unknown toolchain '$NAME'"
-            echo "[k230] usage: download_toolchain {tc1|tc2|tc3|tc4|tc5|tc6|linux|rtos|nuttx|llvm|all}"
-            return 1
-            ;;
+# ===== Toolchain aliases: name -> space-separated TC list =====
+# Single source of truth translating a CLI arg (bare TCn or a human name) into
+# the TCs it needs. Pure/side-effect-free so it's unit-testable without docker.
+# `rt-smart` is just an alias for `rtos` (same TC1+TC3 set); the rest of the
+# project (nncase runtime target, K230_*_SDK_DIR) still says "rtos".
+resolve_toolchain_set() {
+    local norm
+    norm=$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')
+    case "$norm" in
+        tc1|tc2|tc3|tc4|tc5|tc6) echo "$norm" ;;
+        linux)         echo "tc1 tc2" ;;
+        rtos|rt-smart) echo "tc1 tc3" ;;
+        nuttx)         echo "tc5" ;;
+        llvm)          echo "tc6" ;;
+        all)           echo "tc1 tc2 tc3 tc5" ;;
+        *) return 1 ;;
     esac
 }
 
