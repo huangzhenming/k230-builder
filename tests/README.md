@@ -32,7 +32,10 @@ bash tests/report.sh image smoke sdk-nuttx
    （具体布局见 `ci.env.example`），T2-T4 都直接在这些目录里跑构建。这个目录必须放在
    **runner 的 repo checkout 目录之外**（例如 `$HOME/k230-ci`，即 `ci.env.example` 里的默认值），
    因为 `actions/checkout` 每次都会清空 checkout 目录里的未跟踪文件，放里面手工放的 SDK 会被冲掉。
-   然后写好 `tests/ci.env`（同样放在仓库外，或作为 runner 的环境变量文件）。
+   然后写好 `tests/ci.env`，同样放在仓库 checkout 之外——`regression.yml` 里的 "stage
+   tests/ci.env" 步骤会在每次 job 一开始把 `${RUNNER_WORKSPACE}/../ci.env`（即 runner
+   安装目录下的 `ci.env`，与 `_work/` 同级）复制成 `tests/ci.env`，所以每次 checkout
+   把它清掉也没关系，只需要维护这一份仓库外的 `ci.env` 主副本。
 4. 第一次跑会下载 ~5GB 工具链进 `k230_toolchains_ci` 卷，之后增量。
 
 上游 SDK 源码建议 pin 到固定 tag/commit：这样回归失败就能归因于 k230-builder 自身改动，而不是上游漂移。
