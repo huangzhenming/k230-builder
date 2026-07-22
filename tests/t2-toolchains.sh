@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # T2 toolchain provisioning test — through the real `k230` CLI.
 #
-#   K230_CI_IMAGE=k230-builder:nightly ./tests/t2-toolchains.sh
+#   K230_CI_IMAGE=k230-builder:regression ./tests/t2-toolchains.sh
 #
 # `k230 download-toolchains all` downloads TC1/TC2/TC3/TC5 into the CI volume
 # (sha256-verified by toolchain.sh; ~5GB on first run, then cached).

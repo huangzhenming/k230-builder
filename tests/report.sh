@@ -25,13 +25,16 @@ REPO="$(dirname "$HERE")"
 if [ -f "$HERE/ci.env" ]; then
     set -a; source "$HERE/ci.env"; set +a
 fi
-export K230_CI_IMAGE="${K230_CI_IMAGE:-k230-builder:nightly}"
+export K230_CI_IMAGE="${K230_CI_IMAGE:-k230-builder:regression}"
 export K230_CI_VOLUME="${K230_CI_VOLUME:-k230_toolchains_ci}"
 
+# ALL_STAGES=(image smoke unit toolchains
+#             sdk-linux sdk-rtos sdk-nuttx
+#             nncase-compiler nncase-kmodel
+#             nncase-runtime-rtos nncase-runtime-linux nncase-runtime-nuttx)
 ALL_STAGES=(image smoke unit toolchains
-            sdk-linux sdk-rtos sdk-nuttx
-            nncase-compiler nncase-kmodel
-            nncase-runtime-rtos nncase-runtime-linux nncase-runtime-nuttx)
+            sdk-rtos sdk-nuttx)
+
 if [ $# -gt 0 ]; then STAGES=("$@"); else STAGES=("${ALL_STAGES[@]}"); fi
 
 TS="$(date +%Y%m%d-%H%M%S)"
