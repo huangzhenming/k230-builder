@@ -33,7 +33,7 @@ export K230_CI_VOLUME="${K230_CI_VOLUME:-k230_toolchains_ci}"
 #             nncase-compiler nncase-kmodel
 #             nncase-runtime-rtos nncase-runtime-linux nncase-runtime-nuttx)
 ALL_STAGES=(image smoke unit toolchains
-            sdk-rtos sdk-nuttx)
+            sdk-linux sdk-rtos sdk-nuttx)
 
 if [ $# -gt 0 ]; then STAGES=("$@"); else STAGES=("${ALL_STAGES[@]}"); fi
 
