@@ -23,12 +23,17 @@ echo "[smoke] 1/3 bundled host tools present"
 # incl. riscv-none-elf-gcc) are provisioned at RUNTIME into the volume, so they
 # are intentionally NOT part of this offline smoke (see T2 for a real build).
 # Do NOT swallow output: on failure the step log must show WHICH check failed.
+# kconfiglib lives in an isolated venv (docker/Dockerfile) so its flat
+# menuconfig.py/olddefconfig.py modules do not collide with same-named
+# modules in other SDK build systems; only its console scripts are exposed
+# on PATH, so check those instead of "import kconfiglib" against the global
+# python3 (which is intentionally absent there).
 if ! docker run --rm "${UIDGID[@]}" "$IMAGE" bash -c '
 set -e
-for t in west cmake ninja dtc genromfs gperf xxd; do
+for t in west cmake ninja dtc genromfs gperf xxd menuconfig olddefconfig; do
     command -v "$t" >/dev/null || { echo "MISSING: $t"; exit 1; }
 done
-python3 -c "import kconfiglib, Crypto, gmssl" || { echo "MISSING: a python module (kconfiglib/Crypto/gmssl)"; exit 1; }
+python3 -c "import Crypto, gmssl" || { echo "MISSING: a python module (Crypto/gmssl)"; exit 1; }
 echo "  ok: $(west --version | tr -d "\n") / $(cmake --version | head -1)"
 '; then
     echo "[smoke] FAIL: bundled tool check"; exit 1

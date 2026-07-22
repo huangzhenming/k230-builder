@@ -11,7 +11,9 @@
 # Config (usually via tests/ci.env — see ci.env.example):
 #   K230_CI_WORKSPACE    root holding the SDK checkouts        (required)
 #   K230_CI_<X>_SDK      SDK dir name under workspace, or an absolute path
-#   K230_CI_<X>_CMD      build command passed to `k230`
+#   K230_CI_<X>_CMD      build command, run as `k230 bash -c "$CMD"` — may be
+#                        a full shell sequence ("make list-def && make ... &&
+#                        make", "a; b", ...), not just a single command
 #   K230_CI_<X>_ART      artifact glob for find -name          (default *.img)
 #   K230_CI_IMAGE / K230_CI_VOLUME as in t2.
 #
@@ -66,10 +68,12 @@ echo "[t3] provisioning toolchains: download-toolchains $target"
 K230_BUILDER_IMAGE="$IMAGE" K230_BUILDER_VOLUME="$VOLUME" \
     "$REPO/k230" download-toolchains "$target"
 
-echo "[t3] build : k230 $cmd  (image=$IMAGE)"
-read -ra cmd_arr <<< "$cmd"
+echo "[t3] build : k230 bash -c '$cmd'  (image=$IMAGE)"
+# Run through a shell (not argv word-splitting) so K230_CI_*_CMD can be a
+# sequence ("make list-def && make CONF=... && make", "a; b; c", ...), not
+# just a single command.
 K230_BUILDER_IMAGE="$IMAGE" K230_BUILDER_VOLUME="$VOLUME" \
-    "$REPO/k230" "${cmd_arr[@]}"
+    "$REPO/k230" bash -c "$cmd"
 
 echo "[t3] asserting fresh artifacts: $art (newer than build start, >1MB)"
 mapfile -t artifacts < <(find . -path ./.git -prune -o \

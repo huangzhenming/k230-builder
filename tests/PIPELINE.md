@@ -240,8 +240,10 @@ K230_CI_IMAGE=k230-builder:regression ./tests/t2-toolchains.sh
    把这条 SDK 线要用到的工具链准备好（`linux`→TC1+TC2，`rtos`→TC1+TC3，
    `nuttx`→TC5）。
 4. 记录一个 `mktemp` 出来的空文件 `marker`（只用它的 mtime 做时间基准）。
-5. 把 `$cmd` 按空格拆词（`read -ra cmd_arr <<< "$cmd"`）后透传给
-   `"$REPO/k230" "${cmd_arr[@]}"` 执行真正的构建。
+5. 把 `$cmd` 整串交给 `"$REPO/k230" bash -c "$cmd"` 执行——走的是真正的
+   shell，而不是按空格拆词后直接 exec argv。所以 `K230_CI_<X>_CMD` 可以是
+   一整段 shell 序列（`"make list-def && make CONF=... && make"`、
+   `"a; b; c"` 等），不必只是单条命令；单条命令原样兼容。
 6. 构建完，`find . -name "$art" -newer "$marker" -size +1M` 找"比构建起点
    新、且大于 1MB"的匹配文件。一个都没有就 FAIL。**故意不做字节级比对**
    （SDK 构建本来就不可复现），只断言"确实产出了新的、够大的东西"。

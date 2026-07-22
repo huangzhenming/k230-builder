@@ -38,6 +38,8 @@ bash tests/report.sh image smoke sdk-nuttx
 上游 SDK 源码建议 pin 到固定 tag/commit：这样回归失败就能归因于 k230-builder 自身改动，而不是上游漂移。
 Linux SDK 默认全量构建较重，可以在 `ci.env` 里把 `K230_CI_LINUX_CMD` 换成该 SDK 支持的更小构建目标
 （见 `ci.env.example` 里的说明），不需要改这里的脚本。
+`K230_CI_<X>_CMD` 是整段透传给 `bash -c` 执行的，可以写成多条命令的 shell 序列
+（如 `"make list-def && make CONF=... && make"`），不局限于单条命令。
 
 ## 防 regression 约定
 

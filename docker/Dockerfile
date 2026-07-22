@@ -85,12 +85,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages for K230 SDK
-#  - west + kconfiglib: NuttX SDK entry point + Kconfig frontend (CMake build)
+#  - west: NuttX SDK entry point (CMake build)
 #  - gmssl/pycryptodome: K230 image signing (west image)
 #  - conan: nncase C++ dependency manager (pinned to the version nncase v2.11 uses)
 RUN pip3 install --no-cache-dir \
     west \
-    kconfiglib \
     gmssl \
     pycryptodome \
     jsonschema \
@@ -99,6 +98,26 @@ RUN pip3 install --no-cache-dir \
     numpy \
     build \
     cibuildwheel
+
+# kconfiglib (NuttX's Kconfig frontend) ships flat top-level modules
+# (menuconfig.py, olddefconfig.py, ...) that, if installed into the global
+# site-packages, collide with other SDKs' own same-named modules — e.g. the
+# RTOS/RT-Smart SDK's `rt-thread/tools/menuconfig.py` (imported via `from
+# menuconfig import mk_rtconfig`). Since RT-Thread appends rather than
+# prepends its tools/ dir to sys.path, the global kconfiglib module would
+# win that import and break the RTOS build. Isolate kconfiglib in its own
+# venv, and symlink only its console scripts (not its python3/pip, which
+# would otherwise shadow the system python3 on PATH) into /usr/local/bin —
+# that's all NuttX's build needs, since it locates them via `command -v
+# menuconfig`. The venv's site-packages never appears in any other build's
+# sys.path.
+RUN python3 -m venv /opt/kconfiglib-venv && \
+    /opt/kconfiglib-venv/bin/pip install --no-cache-dir kconfiglib && \
+    for tool in menuconfig guiconfig oldconfig olddefconfig alldefconfig \
+                allnoconfig allyesconfig allmodconfig defconfig genconfig \
+                listnewconfig savedefconfig setconfig; do \
+        ln -s "/opt/kconfiglib-venv/bin/$tool" "/usr/local/bin/$tool"; \
+    done
 
 # Install repo tool from Google
 RUN mkdir -p /opt/repo && \
