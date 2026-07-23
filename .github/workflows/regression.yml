@@ -3,12 +3,18 @@ name: Regression
 # Full regression pipeline on the self-hosted runner (label: k230-builder):
 #   image -> smoke -> unit -> toolchains -> sdk-{linux,rtos,nuttx}
 #         -> nncase-{compiler,kmodel,runtime-rtos,runtime-linux,runtime-nuttx}
-# Manual only (k230-builder doesn't change often, so no schedule) — run it
-# after a change you want the heavy SDK/nncase stages to cover.
+# Runs automatically whenever main actually gains a new commit (PR merge,
+# squash, or otherwise) — a `push` trigger rather than `pull_request`, so a
+# fork's PR branch never runs on this self-hosted runner until a maintainer
+# has merged it. Also invoked as a reusable workflow from release.yml on tag
+# push, and available via workflow_dispatch for ad hoc runs.
 # tests/report.sh writes a Markdown report to the job summary + reports/.
 # Runner setup & tests/ci.env: see tests/README.md.
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       stages:
