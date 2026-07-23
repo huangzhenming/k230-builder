@@ -14,15 +14,15 @@ if [ $# -eq 0 ]; then
     exit 2
 fi
 
-declare -A done
+declare -A seen
 for arg in "$@"; do
     set_list="$(resolve_toolchain_set "$arg")" || {
         echo "[k230] error: unknown toolchain '$arg'" >&2
         exit 1
     }
     for tc in $set_list; do
-        [ -n "${done[$tc]:-}" ] && continue
-        done[$tc]=1
+        [ -n "${seen[$tc]:-}" ] && continue
+        seen[$tc]=1
         "download_$tc"
     done
 done
