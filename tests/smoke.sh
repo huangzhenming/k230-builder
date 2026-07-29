@@ -33,6 +33,13 @@ set -e
 for t in west cmake ninja dtc genromfs gperf xxd menuconfig olddefconfig; do
     command -v "$t" >/dev/null || { echo "MISSING: $t"; exit 1; }
 done
+# Image/filesystem tools backing the genimage handlers (docker/Dockerfile).
+# mkdosfs+mcopy/mmd are a pair: genimage creates the vfat, then copies files in
+# via mcopy, so a missing mtools breaks image builds even with mkfs.vfat present.
+for t in genimage mkfs.vfat mkdosfs mcopy mmd mksquashfs genext2fs \
+         mkfs.jffs2 mkfs.ubifs ubinize mkfs.f2fs mkimage zstd lz4 bear; do
+    command -v "$t" >/dev/null || { echo "MISSING: $t"; exit 1; }
+done
 python3 -c "import Crypto, gmssl" || { echo "MISSING: a python module (Crypto/gmssl)"; exit 1; }
 echo "  ok: $(west --version | tr -d "\n") / $(cmake --version | head -1)"
 '; then
@@ -47,7 +54,11 @@ out=$(docker run --rm --entrypoint bash "$IMAGE" -c '
 echo "  ok: nuttx -> $out"
 
 echo "[smoke] 3/3 list-toolchains advertises TC5/TC6"
-docker run --rm --entrypoint list-toolchains "$IMAGE" | grep -q "TC5" \
+# Capture first, then match.  Piping straight into `grep -q` makes grep exit on
+# the first match and SIGPIPE list-toolchains, which under `set -o pipefail`
+# surfaces as a spurious failure of this step.
+tc_list=$(docker run --rm --entrypoint list-toolchains "$IMAGE")
+grep -q "TC5" <<<"$tc_list" \
     || { echo "[smoke] FAIL: list-toolchains missing TC5"; exit 1; }
 echo "  ok"
 

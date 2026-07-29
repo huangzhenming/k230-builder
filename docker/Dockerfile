@@ -88,6 +88,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #  - west: NuttX SDK entry point (CMake build)
 #  - gmssl/pycryptodome: K230 image signing (west image)
 #  - conan: nncase C++ dependency manager (pinned to the version nncase v2.11 uses)
+#  - openpyxl: NuttX SDK k230/bsp/tools/gen_fpioa.py (regenerates the FPIOA pin
+#    table from the vendor pinout .xlsx)
+#  - pillow: NuttX SDK k230/bsp/tools/raw10_to_png.py (decodes RAW10 camera
+#    captures for ISP debugging)
 RUN pip3 install --no-cache-dir \
     west \
     gmssl \
@@ -96,6 +100,8 @@ RUN pip3 install --no-cache-dir \
     jinja2 \
     conan==2.6.0 \
     numpy \
+    openpyxl \
+    pillow \
     build \
     cibuildwheel
 
@@ -169,6 +175,58 @@ ENV K230_TOOLCHAIN_ROOT=/opt/toolchains
 RUN mkdir -p /opt/toolchains
 
 VOLUME ["/opt/toolchains"]
+
+# Additional apt packages, deliberately kept in their OWN layer instead of being
+# folded into the big apt block at the top of this file.
+#
+# That top block is an 835 MB layer, and the layers after it (pip 116 MB, .NET
+# 560 MB, cmake 183 MB) are not byte-reproducible — pip resolves newer point
+# releases, dotnet-install.sh and the cmake tarball land with fresh mtimes. So
+# editing the top block does not just invalidate its own 835 MB: everything
+# downstream gets rebuilt with new blob digests too, and `k230 pull` re-fetches
+# the entire ~612 MB compressed image for what may be a one-word change.
+# Appending here instead leaves every heavy layer's digest untouched, so an
+# existing user downloads only this layer's few MB.
+#
+# Keep this layer LAST among the RUNs but BEFORE the COPY scripts/ block: the
+# scripts churn far more often than the package list, and putting the apt layer
+# after them would make every script edit invalidate it again.
+#
+# The filesystem tools below back the handlers of the genimage built above.  Note
+# that the newer west-based SDK does NOT need them: its tools/genimage_py and
+# tools/image_tools bundle their own mkdosfs/mcopy/mmd/mkuffs/mkimage and prefer
+# that bin/ dir over PATH (see get_tool_path() in tools/genimage_py/common.py).
+# These are for the genimage C binary, which resolves everything from PATH.
+# e2fsprogs (mke2fs/e2fsck/tune2fs), cpio and dtc are already in the image.
+#
+#   dosfstools: mkdosfs/mkfs.vfat/fsck.vfat — genimage's vfat handler shells out
+#               to mkdosfs to create the K230 boot partition.
+#   mtools:     mcopy/mmd — REQUIRED TOGETHER WITH dosfstools.  mkdosfs only
+#               creates an empty filesystem; genimage then populates it with
+#               `MTOOLS_SKIP_CHECK=1 mcopy -sp -i <img> ...`.  Without mtools the
+#               vfat handler dies at that step ("mcopy: not found" -> "failed to
+#               generate <img>.vfat"), so dosfstools alone is not enough.
+#   squashfs-tools, genext2fs: genimage's squashfs and ext2/3/4 handlers.
+#   mtd-utils, f2fs-tools: mkfs.jffs2/mkfs.ubifs/ubinize and mkfs.f2fs, for raw
+#               NOR/NAND and f2fs targets.
+#   u-boot-tools: mkimage, for assembling/inspecting U-Boot image headers by hand
+#               (the SDKs build or bundle their own, this is for interactive use).
+#   zstd, lz4:  kernel image compression (CONFIG_KERNEL_ZSTD/LZ4) and unpacking
+#               vendor archives.
+#   bear:       wraps a build to emit compile_commands.json, so clangd/IDEs can
+#               index the SDK sources (`bear -- make ...`).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    dosfstools \
+    mtools \
+    squashfs-tools \
+    genext2fs \
+    mtd-utils \
+    f2fs-tools \
+    u-boot-tools \
+    zstd \
+    lz4 \
+    bear \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy scripts
 COPY scripts/entrypoint.sh /entrypoint.sh
