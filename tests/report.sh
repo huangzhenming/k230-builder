@@ -10,7 +10,8 @@
 #   nncase-compiler nncase-kmodel
 #   nncase-runtime-rtos nncase-runtime-linux nncase-runtime-nuttx
 #
-# Per stage: pass / FAIL / skip (exit 77), duration, log tail on failure.
+# Per stage: pass / FAIL / TIMEOUT (exit 124) / skip (exit 77), duration, log
+# tail on failure. Set K230_CI_STAGE_TIMEOUT (e.g. 4h) to cap each stage.
 # Output: reports/report-<ts>.md (+ latest.md / latest-logs/ copies for CI
 # artifact upload) and $GITHUB_STEP_SUMMARY when running under Actions.
 # Exit code: non-zero iff any stage failed (skips don't fail the run).
@@ -43,14 +44,27 @@ LOG_DIR="$RPT_DIR/logs-$TS"
 REPORT="$RPT_DIR/report-$TS.md"
 mkdir -p "$LOG_DIR"
 
+# Optional per-stage wall-clock cap (K230_CI_STAGE_TIMEOUT, any `timeout`
+# duration — e.g. 4h). Worth setting in CI: this script writes its Markdown only
+# after the stage loop, so a job-level timeout loses the report entirely and the
+# `if: always()` upload step ships the PREVIOUS run's latest.md, which is worse
+# than no report. With a per-stage cap, one hung stage just fails (timeout exits
+# 124, landing in the FAIL branch below) and the report still gets written.
+# Caveat: `timeout` kills the `docker run` client, not necessarily the processes
+# still running inside the container.
+TMO=()
+if [ -n "${K230_CI_STAGE_TIMEOUT:-}" ]; then
+    TMO=(timeout --foreground "$K230_CI_STAGE_TIMEOUT")
+fi
+
 run_stage() {
     case "$1" in
-        image)      docker build -f "$REPO/docker/Dockerfile" -t "$K230_CI_IMAGE" "$REPO" ;;
-        smoke)      "$HERE/smoke.sh" "$K230_CI_IMAGE" ;;
-        unit)       "$HERE/run.sh" ;;
-        toolchains) "$HERE/t2-toolchains.sh" ;;
-        sdk-*)      "$HERE/t3-sdk.sh" "${1#sdk-}" ;;
-        nncase-*)   "$HERE/t4-nncase.sh" "${1#nncase-}" ;;
+        image)      "${TMO[@]}" docker build -f "$REPO/docker/Dockerfile" -t "$K230_CI_IMAGE" "$REPO" ;;
+        smoke)      "${TMO[@]}" "$HERE/smoke.sh" "$K230_CI_IMAGE" ;;
+        unit)       "${TMO[@]}" "$HERE/run.sh" ;;
+        toolchains) "${TMO[@]}" "$HERE/t2-toolchains.sh" ;;
+        sdk-*)      "${TMO[@]}" "$HERE/t3-sdk.sh" "${1#sdk-}" ;;
+        nncase-*)   "${TMO[@]}" "$HERE/t4-nncase.sh" "${1#nncase-}" ;;
         *)          echo "unknown stage: $1"; return 2 ;;
     esac
 }
@@ -72,9 +86,12 @@ for st in "${STAGES[@]}"; do
 
     note="$(grep -v '^\s*$' "$log" | tail -1 | tr '|`' '/·' | cut -c1-100)"
     case $rcode in
-        0)  res="✅ pass" ;;
-        77) res="⏭️ skip" ;;
-        *)  res="❌ **FAIL**"; overall=1; failed_stages+=("$st") ;;
+        0)   res="✅ pass" ;;
+        77)  res="⏭️ skip" ;;
+        # 124 = killed by the K230_CI_STAGE_TIMEOUT cap. Still a FAIL, but label
+        # it so a timeout isn't mistaken for a build error.
+        124) res="⏱️ **TIMEOUT**"; overall=1; failed_stages+=("$st") ;;
+        *)   res="❌ **FAIL**"; overall=1; failed_stages+=("$st") ;;
     esac
     echo "[report] stage $st: $res ($(fmt_dur $dur))"
     rows+="| $st | $res | $(fmt_dur $dur) | $note |"$'\n'

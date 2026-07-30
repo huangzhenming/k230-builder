@@ -33,7 +33,7 @@ tests/report.sh                 <- 唯一入口，编排 + 生成报告
 ```
 
 `$@`（命令行参数）直接就是要跑的 stage 列表；不传参数时默认跑
-`ALL_STAGES`（report.sh:31-35）：
+`ALL_STAGES`（report.sh:35-36，上方注释里是完整列表）：
 
 ```
 image smoke unit toolchains
@@ -88,11 +88,13 @@ t3/t4 读取的（见 2.3、3.2、3.3）。
 ```
 K230_CI_WORKSPACE=$HOME/k230-ci      # 必填：SDK/nncase checkout 的根目录
 K230_CI_IMAGE / K230_CI_VOLUME       # 同上，可选覆盖默认值
-K230_CI_LINUX_SDK / _CMD / _ART      # sdk-linux + nncase-runtime-linux 用
-K230_CI_RTOS_SDK  / _CMD / _ART      # sdk-rtos  + nncase-runtime-rtos  用
-K230_CI_NUTTX_SDK / _CMD / _ART      # sdk-nuttx 用
+K230_CI_LINUX_SDK / _CLEAN_CMD / _CMD / _ART   # sdk-linux + nncase-runtime-linux 用
+K230_CI_RTOS_SDK  / _CLEAN_CMD / _CMD / _ART   # sdk-rtos  + nncase-runtime-rtos  用
+K230_CI_NUTTX_SDK / _CLEAN_CMD / _CMD / _ART   # sdk-nuttx 用
+K230_CI_NO_CLEAN                     # 设了就跳过所有清理——仅本地调试用
 K230_CI_NUTTX_EXPORT                 # nncase-runtime-nuttx 用（不设则该 stage 跳过）
 K230_CI_REPORT_DIR                   # 报告/日志输出目录，默认 <repo>/reports
+K230_CI_STAGE_TIMEOUT                # 单 stage 墙钟上限（regression.yml 里设 4h）
 ```
 
 `K230_CI_WORKSPACE` 要求的目录布局（README 里也画了）：
@@ -112,18 +114,24 @@ $K230_CI_WORKSPACE/
 
 ### 2.4 单个 stage 怎么跑、怎么判定结果
 
-`run_stage()`（report.sh:43-53）把 stage 名字映射到具体命令：
+`run_stage()`（report.sh:60-70）把 stage 名字映射到具体命令：
 
 ```bash
-image)      docker build -f "$REPO/docker/Dockerfile" -t "$K230_CI_IMAGE" "$REPO" ;;
-smoke)      "$HERE/smoke.sh" "$K230_CI_IMAGE" ;;
-unit)       "$HERE/run.sh" ;;
-toolchains) "$HERE/t2-toolchains.sh" ;;
-sdk-*)      "$HERE/t3-sdk.sh" "${1#sdk-}" ;;      # 例如 sdk-nuttx -> t3-sdk.sh nuttx
-nncase-*)   "$HERE/t4-nncase.sh" "${1#nncase-}" ;; # 例如 nncase-kmodel -> t4-nncase.sh kmodel
+image)      "${TMO[@]}" docker build -f "$REPO/docker/Dockerfile" -t "$K230_CI_IMAGE" "$REPO" ;;
+smoke)      "${TMO[@]}" "$HERE/smoke.sh" "$K230_CI_IMAGE" ;;
+unit)       "${TMO[@]}" "$HERE/run.sh" ;;
+toolchains) "${TMO[@]}" "$HERE/t2-toolchains.sh" ;;
+sdk-*)      "${TMO[@]}" "$HERE/t3-sdk.sh" "${1#sdk-}" ;;      # 例如 sdk-nuttx -> t3-sdk.sh nuttx
+nncase-*)   "${TMO[@]}" "$HERE/t4-nncase.sh" "${1#nncase-}" ;; # 例如 nncase-kmodel -> t4-nncase.sh kmodel
 ```
 
-主循环（第 61-78 行）对每个 stage：
+`TMO` 是 `K230_CI_STAGE_TIMEOUT` 设了才非空的 `(timeout --foreground <dur>)`，
+不设就是空数组、等于没包。加它的原因：报告只在整个 stage 循环跑完后才落盘，
+job 级超时会让报告完全丢失，而 `if: always()` 的 upload 步骤反而会把**上一次**的
+`latest.md` 传上去，比没有报告更误导。注意 `timeout` 杀的是 `docker run` 客户端，
+不保证杀掉容器内已经起来的子进程。
+
+主循环（第 78-98 行）对每个 stage：
 
 1. 记录开始时间 `start=$SECONDS`。
 2. 跑 `run_stage "$st" 2>&1 | tee "$LOG_DIR/$st.log"`，同时输出到终端和落盘日志。
@@ -133,13 +141,15 @@ nncase-*)   "$HERE/t4-nncase.sh" "${1#nncase-}" ;; # 例如 nncase-kmodel -> t4-
    - `0` → ✅ pass
    - `77` → ⏭️ skip（约定的"跳过"退出码，t3/t4 在前置条件缺失时用它，见
      3.2/3.3 里的 `skip()` 函数）
+   - `124` → ⏱️ **TIMEOUT**，即被 `K230_CI_STAGE_TIMEOUT` 掐掉（同样算失败，
+     只是单独标出来，免得把超时误读成构建错误）
    - 其他 → ❌ **FAIL**，并记入 `failed_stages`，整体 `overall=1`
 5. `note` 取该 stage 日志最后一条非空行（截断到 100 字符）作为报告里的
    "备注"列，帮你不用点开日志就能看到 PASS/FAIL 的那句话。
 
 ### 2.5 报告输出
 
-跑完全部 stage 后拼一个 Markdown（第 85-106 行），包含：
+跑完全部 stage 后拼一个 Markdown（第 105-126 行），包含：
 - 时间、主机名、git 分支/commit、镜像 tag 及其 image ID、工具链卷名
 - 一张 Stage / 结果 / 耗时 / 备注 的表格
 - 如果有失败 stage，额外一节"失败详情"，每个失败 stage 附日志末尾 30 行
@@ -224,35 +234,65 @@ K230_CI_IMAGE=k230-builder:regression ./tests/t2-toolchains.sh
 唯一位置参数是目标名（`report.sh` 传入时是从 `sdk-nuttx` 里剥掉
 `sdk-` 前缀得到的 `nuttx`）。
 
-先根据目标名取三个配置（每个都可被 `ci.env` 覆盖，默认值见下表）：
+先根据目标名取四个配置（每个都可被 `ci.env` 覆盖，默认值见下表）：
 
-| target | SDK 目录变量（默认目录名） | 构建命令变量（默认值） | 产物 glob 变量（默认值） |
-|---|---|---|---|
-| linux | `K230_CI_LINUX_SDK`（`k230_linux_sdk`） | `K230_CI_LINUX_CMD`（`make CONF=k230_canmv_defconfig`） | `K230_CI_LINUX_ART`（`*.img`） |
-| rtos  | `K230_CI_RTOS_SDK`（`k230_rtos_sdk`）   | `K230_CI_RTOS_CMD`（同上） | `K230_CI_RTOS_ART`（`*.img`） |
-| nuttx | `K230_CI_NUTTX_SDK`（`k230_nuttx_sdk`） | `K230_CI_NUTTX_CMD`（`west build`） | `K230_CI_NUTTX_ART`（`*.img`） |
+| target | SDK 目录变量（默认目录名） | 清理命令变量（默认值） | 构建命令变量（默认值） | 产物 glob 变量（默认值） |
+|---|---|---|---|---|
+| linux | `K230_CI_LINUX_SDK`（`k230_linux_sdk`） | `K230_CI_LINUX_CLEAN_CMD`（`rm -rf output`） | `K230_CI_LINUX_CMD`（`make CONF=k230_canmv_defconfig`） | `K230_CI_LINUX_ART`（`*.img`） |
+| rtos  | `K230_CI_RTOS_SDK`（`k230_rtos_sdk`）   | `K230_CI_RTOS_CLEAN_CMD`（`make clean; rm -rf output`） | `K230_CI_RTOS_CMD`（同上） | `K230_CI_RTOS_ART`（`*.img`） |
+| nuttx | `K230_CI_NUTTX_SDK`（`k230_nuttx_sdk`） | `K230_CI_NUTTX_CLEAN_CMD`（`west clean`） | `K230_CI_NUTTX_CMD`（`west build`） | `K230_CI_NUTTX_ART`（`*.img`） |
+
+**为什么必须清理**：workspace 下的 SDK checkout 跨 CI run 长期存在，不清就是
+增量空构建——一个编译单元都不跑，stage 照样绿。所以每次回归都是全量从零构建。
+清理基本只花 CPU：大的下载缓存都在被清目录之外（buildroot 的 `dl/` 是 `output/`
+的兄弟目录、1.1GB、连 buildroot 自身 tarball 都在里面；rtos 源码在 `src/`+`.repo`、
+工具链在 `~/.kendryte`；nuttx 的 west project 都是 git 仓库，`.git` 保住）。
+唯一例外是 nuttx：`west clean` 对每个 project 跑 `git clean -xdf`，会连带删掉树内
+下载的 libcxx（3.8MB）/argtable3（0.5MB）tarball，所以那条清理需要网络。
+想先看清理会删什么，`k230 bash -c "west clean -n"`——它有真正的 dry-run。
+几条容易踩的坑：rtos 光 `rm -rf output` 不够（rtsmart/uboot 部分在树内构建，
+要先 `make clean`），但也**不能**用 `make distclean`（它删 `.config`，而默认构建
+命令 `make CONF=...` 不是 `%_defconfig` 目标）；nuttx 必须用 `west clean` 而不是
+`rm -rf build`（前者才会对每个 project 跑 `git clean -xdf`，清掉
+`nuttx/build-<board>/`）。
 
 流程：
 1. SDK 目录若是绝对路径直接用；否则要求 `K230_CI_WORKSPACE` 已设置，拼成
    `$K230_CI_WORKSPACE/$sdk`。目录不存在 → `exit 77`（SKIP，不是失败）。
+   注意 SKIP 判定在清理之前，所以目录缺失时不会误删任何东西。
 2. 确认镜像存在（同 t2）。
 3. `cd` 进 SDK 目录，先 `"$REPO/k230" download-toolchains "$target"`
    把这条 SDK 线要用到的工具链准备好（`linux`→TC1+TC2，`rtos`→TC1+TC3，
-   `nuttx`→TC5）。
-4. 记录一个 `mktemp` 出来的空文件 `marker`（只用它的 mtime 做时间基准）。
-5. 把 `$cmd` 整串交给 `"$REPO/k230" bash -c "$cmd"` 执行——走的是真正的
+   `nuttx`→TC5）。放在清理之前是故意的：工具链进的是 docker 卷、和 SDK 目录
+   无关，先失败可以留着上次的构建产物排查。
+4. 清理：`"$REPO/k230" bash -c "$clean"`——和构建走**同一条**路径，所以
+   `make`/`west` 来自容器镜像、看到的路径和构建时一致，而且 `k230` 只挂载了
+   当前 SDK 目录（`-w /workspace`），等于给 `rm -rf` 加了道爆炸半径围栏。
+   设了 `K230_CI_NO_CLEAN` 则跳过（仅本地调试）。
+5. **给清理"上牙"**：清完立刻断言产物 glob 匹配数为 0，不为 0 就 FAIL 并把残留
+   路径和两种可能病因（清理命令漏了 / `_ART` glob 太宽）一起打出来。没有这条
+   断言，配错的清理命令会静默退化回增量空构建——而且 `west clean` 里单个
+   project 的 `git clean` 失败时只 `log.err` 然后**仍然 exit 0**，`set -e` 抓不到，
+   只有这条断言能发现。
+6. `touch "$marker"`（`mktemp` 出来的空文件，只用 mtime 做时间基准）。放在清理
+   之后、构建之前，让时间窗口精确等于构建本身，不被多分钟的 `rm -rf`/下载模糊掉。
+7. 把 `$cmd` 整串交给 `"$REPO/k230" bash -c "$cmd"` 执行——走的是真正的
    shell，而不是按空格拆词后直接 exec argv。所以 `K230_CI_<X>_CMD` 可以是
    一整段 shell 序列（`"make list-def && make CONF=... && make"`、
    `"a; b; c"` 等），不必只是单条命令；单条命令原样兼容。
-6. 构建完，`find . -name "$art" -newer "$marker" -size +1M` 找"比构建起点
-   新、且大于 1MB"的匹配文件。一个都没有就 FAIL。**故意不做字节级比对**
-   （SDK 构建本来就不可复现），只断言"确实产出了新的、够大的东西"。
+8. 构建完，用和第 5 步**完全相同**的 `list_artifacts()`（`find . -name .git
+   -prune -o -type f -name "$art" -size +1M`）枚举，筛出 `-nt "$marker"` 的。
+   一个都没有就 FAIL（并把陈旧的匹配项列出来帮排查）。两处断言共用一个函数是
+   刻意的：否则可能出现前者认证"已清空"、后者却发现无法归类的残留。
+   **故意不做字节级比对**（SDK 构建本来就不可复现），只断言"确实产出了新的、
+   够大的东西"。
 
-这解释了为什么 Linux SDK 默认命令很重（全量内核+rootfs+应用）：如果你的
-`k230_linux_sdk` checkout 支持更小的构建目标（比如只 `make uboot`/
+这解释了为什么 Linux SDK 默认命令很重（全量内核+rootfs+应用，而且现在每次都跑）：
+如果你的 `k230_linux_sdk` checkout 支持更小的构建目标（比如只 `make uboot`/
 `make linux`），可以在 `ci.env` 里把 `K230_CI_LINUX_CMD` 换成那个更窄的
-命令，同时把 `K230_CI_LINUX_ART` 收紧到匹配那个产物的 glob——不需要改
-`t3-sdk.sh` 本身。
+命令，同时把 `K230_CI_LINUX_ART` 收紧到匹配那个产物的 glob、并把
+`K230_CI_LINUX_CLEAN_CMD` 改成只清那个产物——第 5 步的零产物断言比的就是后两者。
+不需要改 `t3-sdk.sh` 本身。
 
 ### 3.4 t4-nncase.sh（stage: `nncase-compiler` / `nncase-kmodel` / `nncase-runtime-*`）
 
@@ -262,12 +302,16 @@ K230_CI_IMAGE=k230-builder:regression ./tests/t2-toolchains.sh
 
 前置检查（对所有子命令都一样）：
 - `K230_CI_WORKSPACE` 必须设置且存在，否则 SKIP。
-- `has_plugin()`：workspace 下必须能找到一个含
+- `resolve_plugin()`：workspace 下必须能找到一个含
   `modules/Nncase.Modules.K230` 的目录——要么是
-  `$NNCASE_PLUGIN_DIR`（如果设置了），要么扫 workspace 的一级子目录。找不到
+  `$NNCASE_PLUGIN_DIR`（如果设置了），要么 workspace 自身，要么扫 workspace 的
+  一级子目录（和 `scripts/nncase:68-87` 同一套规则）。找不到
   就 SKIP（这是 nncase-k80 插件仓库，前面 2.3 提到过，**不会自动 clone**，
-  必须手工 checkout 到 workspace 里）。
+  必须手工 checkout 到 workspace 里）。它返回真实路径而不只是真假值，因为
+  compiler 的清理需要知道插件仓库在哪。
 - 镜像必须存在（同 t2/t3）。
+- 一个 `mktemp` 出来的 `marker` 文件，在每次构建前 `touch`，所有断言都要求产物
+  比它新。和 t3 同一个思路：workspace 里的仓库跨 run 长期存在，陈旧产物不能算过。
 
 内部有个 `run_k230()` 帮助函数：接受一串 `ENV=VAL` 再跟 `--` 再跟真正的
 `k230` 参数，`cd` 到 `$WS`（workspace）后拼出
@@ -277,21 +321,37 @@ K230_CI_IMAGE=k230-builder:regression ./tests/t2-toolchains.sh
 
 各子命令：
 
-- **compiler**：`run_k230 -- nncase compiler`。这会在容器里依次
+- **compiler**：先清理，再 `run_k230 -- nncase compiler`。这会在容器里依次
   `conan install/cmake build` 基础 nncase 仓库（native，x86）、
   再建 K230 插件的 native 模拟器、最后 `dotnet build` C# 编译器。
   完成后断言
   `$WS/$BASE/src/Nncase.Compiler/bin/Release/net7.0/Nncase.Compiler.dll`
-  存在（`$BASE` 默认 `nncase`，可用 `NNCASE_BASE_DIR` 覆盖）。这一步只需要
-  host 编译器，不需要任何 RISC-V 工具链。
+  存在**且比 marker 新**（`$BASE` 默认 `nncase`，可用 `NNCASE_BASE_DIR` 覆盖）。
+  这一步只需要 host 编译器，不需要任何 RISC-V 工具链。
 
-- **kmodel**：把 `tests/fixtures/tiny.onnx`（596B，一个 Conv+Relu 的
-  确定性小模型，由 `fixtures/gen_tiny_onnx.py` 生成）拷进 workspace，
-  跑 `run_k230 -- nncase kmodel .ci-tiny.onnx .ci-tiny.kmodel`，即用刚才
-  编出的 `Nncase.Compiler.dll` 通过 Python 绑定把 onnx 编成 kmodel。断言
-  产物存在且 ≥1024 字节。**这是整条编译器链路唯一的"功能性"验证**——不只是
-  编译器能编出来，而是它编出的东西看起来是合理的 kmodel。要求 `compiler`
-  stage 已经先跑过。
+  清理的范围值得说清楚：`scripts/nncase` **自己**已经每次 `rm -rf` 掉
+  cmake/conan 的构建目录（`:107`/`:116` 编译器、`:190` runtime install 目录、
+  `:194`/`:210` runtime 构建目录），所以 native 半边本来就是从零构建。跨 run 存活、
+  让 compiler 变增量的是 **dotnet 半边**（两个仓库里 `*.csproj` 旁边的
+  `bin/`+`obj/`）和 cmake 的 install prefix `$BASE/nncase-native/`
+  （`scripts/nncase:101` 写入，从不删除）。所以 `prune_dotnet()` 删的就是这些，
+  而且**只删紧邻 `*.csproj` 的 `bin`/`obj`、且 git 里没有跟踪内容的**——`bin`
+  是个普通目录名，base 仓库的 install prefix 自己就有个 `nncase-native/bin`，
+  无脑 `find -name bin -exec rm -rf` 会误伤它。同样"给清理上牙"：清完断言那个
+  dll 确实消失了，否则 FAIL。
+  两样东西刻意**不删**：base 仓库目录本身（`scripts/nncase:56-66` 在目录缺失时
+  会从网络重新 clone，删它不是免费的），以及 docker 卷里的 conan/NuGet 缓存
+  （内容寻址的合法缓存，`--build=missing` 只会重编缺的第三方依赖）。
+  清理放在测试脚本里、不动 `scripts/nncase`：后者是产品行为，改了会让所有用户
+  的日常构建都变慢。
+
+- **kmodel**：先删掉上次的 `.ci-tiny.kmodel`，把 `tests/fixtures/tiny.onnx`
+  （596B，一个 Conv+Relu 的确定性小模型，由 `fixtures/gen_tiny_onnx.py` 生成）
+  拷进 workspace，跑 `run_k230 -- nncase kmodel .ci-tiny.onnx .ci-tiny.kmodel`，
+  即用刚才编出的 `Nncase.Compiler.dll` 通过 Python 绑定把 onnx 编成 kmodel。断言
+  产物存在、**比 marker 新**、且 ≥1024 字节。**这是整条编译器链路唯一的"功能性"
+  验证**——不只是编译器能编出来，而是它编出的东西看起来是合理的 kmodel。要求
+  `compiler` stage 已经先跑过。
 
 - **runtime-rtos / runtime-linux**：分别要求
   `$WS/$sdk`（`K230_CI_RTOS_SDK`/`K230_CI_LINUX_SDK`，默认
@@ -303,7 +363,10 @@ K230_CI_IMAGE=k230-builder:regression ./tests/t2-toolchains.sh
   + libmmz 去 conan/cmake 建 nncase 的设备端 runtime（RISC-V 静态库）。
   完成后 `assert_static_libs`：确认
   `$WS/nncase_rtt_runtime`（或 `nncase_linux_runtime`）目录下有
-  `*.a` 文件。
+  `*.a` 文件，**且没有一个比 marker 旧**。runtime 这三个子命令不需要额外清理：
+  `scripts/nncase:190` 每次构建前就把 install 目录清空了，所以里面的 `*.a`
+  按构造就是本次产出的。陈旧检查还是加了——今天的安全性依赖的是另一个脚本某一行
+  的副作用，两行代码让它本地自洽，那行 `rm -rf` 以后挪走了也不会静默失效。
 
 - **runtime-nuttx**：额外要求 `K230_CI_NUTTX_EXPORT`
   （workspace 下的一个目录名）已设置，且该目录下有 `include/`（说明是一个
@@ -325,7 +388,8 @@ $EDITOR tests/ci.env          # 至少填 K230_CI_WORKSPACE，按需覆盖 SDK/�
 # 先准备 $K230_CI_WORKSPACE 下的四个 checkout（README 第 3 步）：
 #   k230_linux_sdk/ k230_rtos_sdk/ k230_nuttx_sdk/ nncase-k80/
 
-bash tests/report.sh                 # 全流水线（很重，首次 ~5GB 下载 + 多个 SDK 全量构建）
+bash tests/report.sh                 # 全流水线（很重：首次另有 ~5GB 工具链下载，
+                                     # 而多个 SDK 的全量构建是每次都跑的）
 bash tests/report.sh toolchains      # 只验证工具链下载/交叉编译（几分钟级别）
 bash tests/report.sh image smoke sdk-nuttx nncase-runtime-nuttx
 ```

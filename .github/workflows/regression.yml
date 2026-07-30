@@ -8,6 +8,9 @@ name: Regression
 # fork's PR branch never runs on this self-hosted runner until a maintainer
 # has merged it. Also invoked as a reusable workflow from release.yml on tag
 # push, and available via workflow_dispatch for ad hoc runs.
+# Every run is a full from-scratch build: the SDK checkouts on the runner persist
+# across runs, so t3-sdk.sh cleans each one first — without that the builds are
+# incremental no-ops that compile nothing and pass anyway.
 # tests/report.sh writes a Markdown report to the job summary + reports/.
 # Runner setup & tests/ci.env: see tests/README.md.
 
@@ -29,10 +32,22 @@ on:
         default: ''
         type: string
 
+# Every regression run is a full from-scratch build (tests/t3-sdk.sh cleans each
+# SDK checkout first), so runs are long and their cost doesn't amortise across
+# pushes. On a single self-hosted runner, back-to-back merges would otherwise
+# queue multi-hour jobs; only the newest commit on a ref is worth testing.
+# Tag runs (via release.yml's workflow_call) get their own group per ref, so a
+# push to main never cancels a release.
+concurrency:
+  group: regression-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   regression:
     runs-on: [self-hosted, k230-builder]
-    timeout-minutes: 480
+    # 480 was sized for incremental SDK builds. Now that every run cleans first,
+    # a full buildroot + kernel + rootfs is 1.5-3h for the Linux SDK alone.
+    timeout-minutes: 720
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +59,14 @@ jobs:
       - name: stage tests/ci.env
         run: cp "${RUNNER_WORKSPACE}/../../ci.env" tests/ci.env
 
+      # Cap each stage well under timeout-minutes above: report.sh writes its
+      # Markdown only after the stage loop, so a job-level timeout would lose the
+      # report AND make the `if: always()` upload below ship the previous run's
+      # latest.md. One hung stage now fails on its own and the report survives.
+      # (A value in tests/ci.env would override this — it's sourced by report.sh.)
       - name: regression pipeline + report
+        env:
+          K230_CI_STAGE_TIMEOUT: 4h
         run: bash tests/report.sh ${{ inputs.stages }}
 
       - name: upload report
