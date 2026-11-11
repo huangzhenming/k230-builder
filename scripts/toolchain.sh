@@ -5,7 +5,7 @@ set -u
 TOOLCHAIN_ROOT=${K230_TOOLCHAIN_ROOT:-/opt/toolchains}
 
 # ===== TC1: Xuantie-900 gcc 5.10.4 (glibc, bz2) =====
-TC1_URLS=${TC1_URLS:-"https://kendryte-download.canaan-creative.com/k230/toolchain/Xuantie-900-gcc-linux-5.10.4-glibc-x86_64-V2.6.0.tar.bz2"}
+TC1_URLS=${TC1_URLS:-"https://download.kendryte.com/k230/toolchain/Xuantie-900-gcc-linux-5.10.4-glibc-x86_64-V2.6.0.tar.bz2"}
 TC1_VERSION=${TC1_VERSION:-"V2.6.0"}
 TC1_DIR=${TC1_DIR:-"Xuantie-900-gcc-linux-5.10.4-glibc-x86_64-V2.6.0"}
 TC1_BIN=${TC1_BIN:-"riscv64-unknown-linux-gnu-gcc"}
@@ -13,7 +13,7 @@ TC1_BIN_FULL="bin/${TC1_BIN}"
 TC1_SHA256=${TC1_SHA256:-"17decb02130b8d79a1eb8c2126e17749fbea603dae7d95f20cd4ab411f3f1a41"}
 
 # ===== TC2: Xuantie-900 gcc 6.6.0 (glibc, gz) =====
-TC2_URLS=${TC2_URLS:-"https://kendryte-download.canaan-creative.com/k230/downloads/dl/gcc/Xuantie-900-gcc-linux-6.6.0-glibc-x86_64-V3.0.2-20250410.tar.gz"}
+TC2_URLS=${TC2_URLS:-"https://download.kendryte.com/k230/downloads/dl/gcc/Xuantie-900-gcc-linux-6.6.0-glibc-x86_64-V3.0.2-20250410.tar.gz"}
 TC2_VERSION=${TC2_VERSION:-"V3.0.2"}
 TC2_DIR=${TC2_DIR:-"Xuantie-900-gcc-linux-6.6.0-glibc-x86_64-V3.0.2"}
 TC2_BIN=${TC2_BIN:-"riscv64-unknown-linux-gnu-gcc"}
@@ -21,7 +21,7 @@ TC2_BIN_FULL="bin/${TC2_BIN}"
 TC2_SHA256=${TC2_SHA256:-"2215e1ffe1b9b9277b1f5af2f61102e83973163404f29b04da7097fdafa9e1b7"}
 
 # ===== TC3: musl (RT-Smart, bz2) =====
-TC3_URLS=${TC3_URLS:-"https://kendryte-download.canaan-creative.com/k230/toolchain/riscv64-unknown-linux-musl-rv64imafdcv-lp64d-20230420.tar.bz2"}
+TC3_URLS=${TC3_URLS:-"https://download.kendryte.com/k230/toolchain/riscv64-unknown-linux-musl-rv64imafdcv-lp64d-20230420.tar.bz2"}
 TC3_VERSION=${TC3_VERSION:-"20230420"}
 TC3_DIR=${TC3_DIR:-"riscv64-linux-musleabi_for_x86_64-pc-linux-gnu"}
 TC3_BIN=${TC3_BIN:-"riscv64-unknown-linux-musl-gcc"}
