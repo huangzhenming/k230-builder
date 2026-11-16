@@ -25,6 +25,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install packages based on official kendryte Dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    sudo \
     build-essential \
     cmake \
     git \
@@ -84,6 +85,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xxd \
     && rm -rf /var/lib/apt/lists/*
 
+RUN echo 'ALL ALL = (ALL) NOPASSWD: ALL' >> /etc/sudoers
+
 # Install Python packages for K230 SDK
 #  - west: NuttX SDK entry point (CMake build)
 #  - gmssl/pycryptodome: K230 image signing (west image)
@@ -93,6 +96,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #  - pillow: NuttX SDK k230/bsp/tools/raw10_to_png.py (decodes RAW10 camera
 #    captures for ISP debugging)
 RUN pip3 install --no-cache-dir \
+    pcpp \
     west \
     gmssl \
     pycryptodome \
