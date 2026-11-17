@@ -57,8 +57,16 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Layer cache lives in ghcr (`:buildcache`), not only in the GHA cache:
+          # GHA evicts entries unused for 7 days, releases are weeks apart, and a
+          # cold build re-creates the apt/pip/.NET/cmake layers with new digests
+          # even from an unchanged Dockerfile — so every user re-pulls ~600 MB.
+          # The registry cache never expires. type=gha stays as a second source
+          # for the transition (it still holds v0.4.2's layers).
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+            type=gha
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')

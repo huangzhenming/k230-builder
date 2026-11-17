@@ -15,7 +15,14 @@
 # Run:
 #   docker run --rm -it -v k230_toolchains:/opt/toolchains k230-builder:latest bash
 
-FROM ubuntu:22.04
+# Base image is PINNED BY DIGEST, not the floating `ubuntu:22.04` tag. Canonical
+# republishes 22.04 every few weeks; each re-point changes the base layer, which
+# invalidates the cache for EVERY layer below and makes `k230 pull` re-fetch the
+# whole ~600 MB image even when only a script changed (v0.4.1 -> v0.4.2 did
+# exactly that). Bump this deliberately, and only together with a release that
+# is allowed to cost users a full download.
+#   sha256:076e7bf8... = ubuntu:jammy-20261020 (the base of v0.4.2)
+FROM ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11
 
 # NOTE: which toolchains get provisioned is decided at RUNTIME, by explicitly
 # running `k230 download-toolchains <TC1..TC6|linux|rtos|nuttx|...>` — NOT
@@ -25,7 +32,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install packages based on official kendryte Dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    sudo \
     build-essential \
     cmake \
     git \
@@ -85,8 +91,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xxd \
     && rm -rf /var/lib/apt/lists/*
 
-RUN echo 'ALL ALL = (ALL) NOPASSWD: ALL' >> /etc/sudoers
-
 # Install Python packages for K230 SDK
 #  - west: NuttX SDK entry point (CMake build)
 #  - gmssl/pycryptodome: K230 image signing (west image)
@@ -96,7 +100,6 @@ RUN echo 'ALL ALL = (ALL) NOPASSWD: ALL' >> /etc/sudoers
 #  - pillow: NuttX SDK k230/bsp/tools/raw10_to_png.py (decodes RAW10 camera
 #    captures for ISP debugging)
 RUN pip3 install --no-cache-dir \
-    pcpp \
     west \
     gmssl \
     pycryptodome \
@@ -231,6 +234,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     lz4 \
     bear \
     && rm -rf /var/lib/apt/lists/*
+
+# Additions since v0.4.2, in their OWN layer for the same reason as the block
+# above: every layer above this line stays byte-identical to v0.4.2, so an
+# existing user pulls only this one small layer. New packages go into a NEW
+# trailing RUN like this one — never into the apt/pip blocks above.
+#   sudo: the k230 Linux SDK build calls sudo. The container's runtime user
+#         (created by entrypoint.sh) gets passwordless sudo via sudoers.d.
+#   pcpp: pure-Python C preprocessor used by the k230 Linux SDK build. Pinned so
+#         a cold rebuild of this layer is reproducible.
+RUN apt-get update && apt-get install -y --no-install-recommends sudo \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo 'ALL ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/k230-nopasswd \
+    && chmod 0440 /etc/sudoers.d/k230-nopasswd \
+    && visudo -cf /etc/sudoers.d/k230-nopasswd \
+    && pip3 install --no-cache-dir pcpp==1.30
 
 # Copy scripts
 COPY scripts/entrypoint.sh /entrypoint.sh
